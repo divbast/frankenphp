@@ -13,26 +13,33 @@ default:
     @just --list
 
 # Fetch divbast/ci at the commit the workflows pin, then install the toolchain
-setup:
+setup: ci-checkout
     #!/usr/bin/env bash
     # Not through the mise exec shell: this is what installs what it runs
+    set -euo pipefail
+    mise install
+
+# Fetch divbast/ci at the commit the workflows pin, into .ci, and nothing else
+ci-checkout:
+    #!/usr/bin/env bash
+    # Not through the mise exec shell, which would first install every tool
+    # in mise.toml that is missing
     set -euo pipefail
     # The one release commit every workflow calls divbast/ci at
     uses="^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*[\"']?divbast/ci/[^@[:space:]\"']+@[^[:space:]\"'#]+"
     sha=$(grep -hoE "${uses}" .github/workflows/*.y*ml | sed 's/.*@//' | sort -u | paste -sd ' ' - || true)
     if [[ ! "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
-        echo "setup: the workflows must call divbast/ci at one full commit SHA, not at: ${sha:-none}" >&2
+        echo "ci-checkout: the workflows must call divbast/ci at one full commit SHA, not at: ${sha:-none}" >&2
         exit 1
     fi
     have=$(git -C .ci rev-parse HEAD 2>/dev/null || true)
     if [[ "${have}" == "${sha}" ]]; then
-        echo "setup: .ci is already at ${sha}"
+        echo "ci-checkout: .ci is already at ${sha}"
     else
         git init -q .ci
         git -C .ci fetch -q --depth 1 https://github.com/divbast/ci "${sha}"
         git -C .ci checkout -q FETCH_HEAD
     fi
-    mise install
 
 # Build one app's carrier image, localhost/frankenphp:APP, from apps/APP.env
 build-app APP:

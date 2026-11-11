@@ -96,9 +96,12 @@ this project's one record of LLM involvement.
 
 ## Key commands
 
-- `just setup` checks divbast/ci out at the commit the workflows pin, into
-  `.ci/`, and installs the toolchain from `mise.toml`. One command on a
-  fresh clone
+- `just setup` runs `just ci-checkout`, which checks divbast/ci out at the
+  commit the workflows pin, into `.ci/`, then installs the toolchain from
+  `mise.toml`. One command on a fresh clone. The publish job runs only
+  `ci-checkout`: beside its write scopes it installs Go and just and
+  nothing else, and `cmd/frankenphp-manifest/workflow_test.go` holds it
+  to that
 - `just build-app <app>` builds one app's carrier as
   `localhost/frankenphp:<app>`
 - `just ci` runs every gate. Run it before committing; `just lint` is
