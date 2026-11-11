@@ -21,12 +21,13 @@ on:
   push:
     branches: [main]
   schedule:
-    # The daily rebuild, from scratch. spc resolves several C libraries to
-    # their newest release, and libaom to its branch's head, while the build
-    # runs, so a rebuild of an unchanged main can hold different code. When
-    # main is still the published commit, it publishes only when the version
-    # manifest of either architecture moved; when main has moved past it, as
-    # after a merge whose own publish failed, it publishes main.
+    # The daily rebuild, from scratch. spc resolves the Go toolchain and most
+    # C libraries to their newest release, libaom to its branch's head, and,
+    # with a newer Go than the builder's, xcaddy to its branch's head, while
+    # the build runs, so a rebuild of an unchanged main can hold different
+    # code. When main is still the published commit, it publishes only when
+    # the version manifest of either architecture moved; when main has moved
+    # past it, as after a merge whose own publish failed, it publishes main.
     # 12:13 UTC, early enough that a start GitHub gives hours late still
     # lands before the apps' own daily slots, which take the new binary.
     - cron: '13 12 * * *'

@@ -9,7 +9,10 @@
 ARG BUILDER_IMAGE=dunglas/frankenphp:static-builder-gnu@sha256:4dcdd53971ba1f373c3eb90e393dd3944687938c5c03494ab684921594905fc7
 # The binary's own roots. Unset, build-static.sh takes the newest PHP 8.5 from
 # php.net and xcaddy the newest Caddy and plugins, so two builds of one commit
-# ship different binaries. build/pinned-versions.sh checks the binary agrees.
+# could ship a different PHP or Caddy. build/pinned-versions.sh checks the
+# binary agrees. Not every input is pinned: spc still chooses the Go
+# toolchain, xcaddy and most C libraries as it runs, and records.sh writes
+# down which.
 ARG PHP_VERSION=8.5.12
 ARG CADDY_VERSION=v2.11.9
 ARG CBROTLI_VERSION=v1.0.1

@@ -42,10 +42,12 @@ this project's one record of LLM involvement.
 ## The binary's rules
 
 - **The pins live in the Containerfile, once, for every app.** The builder
-  image by digest, `PHP_VERSION`, `CADDY_VERSION`, the three plugin ARGs and
-  `SPC_COMMIT`. Left unset, `build-static.sh` takes the newest PHP 8.5 from
-  php.net, xcaddy the newest Caddy and plugins, and spc arrives as an
-  unchecked nightly, so two builds of one commit would differ.
+  image by digest, which also brings the FrankenPHP source, `PHP_VERSION`,
+  `CADDY_VERSION`, the three plugin ARGs and `SPC_COMMIT`. Left unset,
+  `build-static.sh` takes the newest PHP 8.5 from php.net, xcaddy the
+  newest Caddy and plugins, and spc arrives as an unchecked nightly. The
+  pins fix those and not every input: spc still chooses some while the
+  build runs (below), so two builds of one commit can still differ.
   `build/pinned-versions.sh` fails the build if the binary's own build info
   disagrees with a pin, because Go's minimum version selection lifts a
   module above its pin without a word, and `build/pinned-spc.sh` fails it if
@@ -67,14 +69,22 @@ this project's one record of LLM involvement.
   `craft.yml`. For LibreSpeed it is what brings gd's suggested codecs,
   libavif among them; `EXPECTED_EXTENSIONS` and `REQUIRED_GD_FEATURES` are
   what pin down the result
-- **Library sources resolve at build time.** The spc commit fixes how the
-  binary is built, not every source in it: openssl, zlib and several other C
-  libraries come from the newest release that matches, and libaom from its
-  main branch's head. That is how C-library fixes arrive, and Trivy cannot
-  see those libraries in the binary. So the daily run rebuilds from scratch
-  and, when main is still the published commit, publishes when either
-  architecture's manifest moved; and every run that can publish builds
-  without the cache, which would otherwise hold what an earlier run fetched
+- **Some inputs resolve at build time.** The spc commit fixes how the
+  binary is built, not every input to it. spc takes the Go toolchain as the
+  newest release go.dev lists; xcaddy, which writes the binary's main
+  module and runs its build, from its `master` branch's head when that Go
+  is newer than the builder image's, and otherwise the builder image's own
+  xcaddy; libaom from its main branch's head; openssl, zlib and most other
+  libraries from the newest GitHub release or tag that matches; and
+  libiconv from GNU's file listing. Of the libraries the apps build, only
+  sqlite and bzip2 come from fixed URLs in spc's config. The rest are how
+  library fixes arrive, and Trivy cannot see any of them in the binary.
+  The manifest records each of these inputs (`go`, `xcaddy` and
+  `libraries`), whichever way each was chosen, so the daily run
+  rebuilds from scratch and, when main is still the published commit,
+  publishes when either architecture's manifest moved; and every run that
+  can publish builds without the cache, which would otherwise hold what an
+  earlier run fetched
 - **Only the daily rebuild of the published commit compares manifests.** A
   merge's run that compared, racing the daily run on the same commit, or a
   re-run of a publish job with its old carriers, would publish libraries its

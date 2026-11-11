@@ -5,7 +5,11 @@
 
 The [FrankenPHP](https://github.com/php/frankenphp) binaries divbast's
 images run: PHP 8.5 and Caddy in one binary, built once per app with that
-app's PHP extensions, from pinned sources, and attested.
+app's PHP extensions, and attested. The builder image, FrankenPHP, PHP,
+Caddy and its plugins, and static-php-cli are pinned; the Go toolchain,
+xcaddy and most of the C libraries are chosen while the build runs, and
+each carrier records what was chosen, as
+[What goes into a binary](#what-goes-into-a-binary) says.
 
 Published as `ghcr.io/divbast/frankenphp`.
 
@@ -55,7 +59,8 @@ to verify what an app's Containerfile pins.
 
 Every app's binary is built by one `Containerfile` from the same pins:
 
-- the `dunglas/frankenphp:static-builder-gnu` image, by digest;
+- the `dunglas/frankenphp:static-builder-gnu` image, by digest, which also
+  holds the FrankenPHP source the binary is built from;
 - PHP, Caddy and Caddy's three plugins, by version;
 - static-php-cli (spc), which builds PHP and its C libraries, by commit.
 
@@ -68,10 +73,23 @@ which `build/extensions.sh` checks. `cmd/frankenphp-buildargs` reads the file
 and refuses anything else in it; `just build-app` and the build workflow
 both build through it.
 
-spc still chooses some sources while the build runs: openssl, zlib and
-several other C libraries come from their newest release, and libaom from
-its main branch. So a rebuild of an unchanged commit can hold newer C code,
-and that is how library fixes arrive.
+The pins do not fix every input. spc chooses these while the build runs:
+
+- the Go toolchain: the newest release go.dev lists;
+- xcaddy, which writes the binary's main module and runs its build: the
+  head of its `master` branch when spc fetches a newer Go than the builder
+  image holds, and otherwise the xcaddy the builder image installed;
+- libaom: the head of its main branch;
+- brotli, freetype, libavif, libjpeg, libpng, libwebp, libxml2, onig,
+  openssl, watcher, xz and zlib: the newest GitHub release or tag that
+  matches spc's rule for each;
+- libiconv: the newest in GNU's file listing.
+
+Of the libraries the two apps build, only sqlite and bzip2 come from fixed
+URLs in spc's config instead. A rebuild of an unchanged commit can
+therefore hold newer code, which is how fixes to the others arrive. The
+manifest below records each of these inputs, so the daily rebuild
+publishes when one moves.
 
 ## The manifest
 
