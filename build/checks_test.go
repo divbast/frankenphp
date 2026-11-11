@@ -18,6 +18,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/divbast/frankenphp/internal/appenv"
 )
 
 // The versions the testdata binary reports, as the Containerfile's ARGs pin
@@ -29,17 +31,6 @@ var pins = map[string]string{
 	"MERCURE_VERSION": "v1.1.6",
 	"VULCAIN_VERSION": "v1.4.6",
 }
-
-// What the testdata binaries load and what LibreSpeed asks of gd, as
-// apps/*.env write them.
-const (
-	librespeedExtensions = "core,ctype,date,filter,frankenphp-cli,gd,hash,json,lexbor,opcache,openssl," +
-		"pcntl,pcre,pdo,pdo_sqlite,phar,posix,random,reflection,session,spl,sqlite3,standard,uri,zlib"
-	baikalExtensions = "core,ctype,date,dom,filter,frankenphp-cli,hash,iconv,json,lexbor,libxml,mbstring," +
-		"opcache,openssl,pcntl,pcre,pdo,pdo_sqlite,posix,random,reflection,session,simplexml,spl,sqlite3," +
-		"standard,tokenizer,uri,xml,xmlreader,xmlwriter,zlib"
-	librespeedGD = "FreeType Support,PNG Support"
-)
 
 // testCase is one run of a script.
 type testCase struct {
@@ -211,14 +202,7 @@ func TestExtensions(t *testing.T) {
 
 	tests := []testCase{
 		{name: "ok"},
-		{
-			name: "baikal",
-			app:  "baikal",
-			set: map[string]string{
-				"EXPECTED_EXTENSIONS":  baikalExtensions,
-				"REQUIRED_GD_FEATURES": "",
-			},
-		},
+		{name: "baikal", app: "baikal"},
 		{
 			name:  "extra",
 			edits: []edit{{"extensions", `(?m)^Phar$`, "Phar\nintl"}},
@@ -258,9 +242,12 @@ func TestExtensions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
+			// What the build passes: the app's own apps/<app>.env,
+			// checked against what its published binary loads.
+			app := appInputs(t, tt.app)
 			env := stub(t, tt.app, tt.edits)
-			env["EXPECTED_EXTENSIONS"] = librespeedExtensions
-			env["REQUIRED_GD_FEATURES"] = librespeedGD
+			env["EXPECTED_EXTENSIONS"] = app.ExpectedExtensions
+			env["REQUIRED_GD_FEATURES"] = app.RequiredGDFeatures
 			check(t, run(t, "extensions", tt.inputs(t, env)), tt.want)
 		})
 	}
@@ -373,6 +360,26 @@ func TestRecords(t *testing.T) {
 			}
 		})
 	}
+}
+
+// appInputs reads apps/<app>.env, LibreSpeed's when app is empty, as every
+// build does.
+func appInputs(t *testing.T, app string) appenv.Inputs {
+	t.Helper()
+
+	if app == "" {
+		app = "librespeed"
+	}
+	root, err := os.OpenRoot(filepath.Join("..", "apps"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = root.Close() })
+	in, err := appenv.Load(root, app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return in
 }
 
 // stub copies testdata/<app>'s canned answers, LibreSpeed's when app is

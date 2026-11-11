@@ -37,18 +37,21 @@ setup:
 # Build one app's carrier image, localhost/frankenphp:APP, from apps/APP.env
 build-app APP:
     #!/usr/bin/env bash
-    # Not through the mise exec shell: docker and gh are the host's own
+    # One script, not a shell per line, so that the loop below can run
     set -euo pipefail
-    # Each KEY=value line, unquoted, is one build argument
-    args=(--build-arg "APP={{ APP }}")
-    while IFS= read -r line; do
-        [[ -z "${line}" || "${line}" == "#"* ]] || args+=(--build-arg "${line}")
-    done <"apps/{{ APP }}.env"
+    # frankenphp-buildargs refuses a file that sets anything but the four
+    # inputs. It prints one whole build argument per line: a value may hold
+    # spaces, never a newline.
+    out=$(mise exec -- go run ./cmd/frankenphp-buildargs {{ quote(APP) }})
+    args=(--build-arg "APP="{{ quote(APP) }})
+    while IFS= read -r arg; do
+        args+=(--build-arg "${arg}")
+    done <<<"${out}"
     # gh's token reaches spc as a secret, so its GitHub API calls escape the
     # unauthenticated rate limit. It never reaches a layer.
     GITHUB_TOKEN="${GITHUB_TOKEN:-$(gh auth token)}" {{ ENGINE }} build --target carrier \
         --secret id=github_token,env=GITHUB_TOKEN "${args[@]}" \
-        -t "localhost/frankenphp:{{ APP }}" -f Containerfile .
+        -t "localhost/frankenphp:"{{ quote(APP) }} -f Containerfile .
 
 # Every lint gate
 lint:
