@@ -1,0 +1,25 @@
+Core
+PDO
+Phar
+Reflection
+SPL
+Zend OPcache
+ctype
+date
+filter
+frankenphp-cli
+gd
+hash
+json
+lexbor
+openssl
+pcntl
+pcre
+pdo_sqlite
+posix
+random
+session
+sqlite3
+standard
+uri
+zlib

@@ -1,0 +1,218 @@
+{
+    "sqlite": {
+        "source": {
+            "lock_type": "source",
+            "cache_type": "archive",
+            "filename": "sqlite-autoconf-3450200.tar.gz",
+            "extract": null,
+            "hash": "ad56cfe252ea0a86c22812c79f207d265ae4533d",
+            "time": 1794386415,
+            "version": null,
+            "config": {
+                "type": "url",
+                "url": "https://www.sqlite.org/2024/sqlite-autoconf-3450200.tar.gz"
+            },
+            "downloader": "StaticPHP\\Artifact\\Downloader\\Type\\Url"
+        },
+        "binary": []
+    },
+    "brotli": {
+        "source": {
+            "lock_type": "source",
+            "cache_type": "archive",
+            "filename": "google-brotli-go-brotli-v1.2.1-0-gdb24a98.tar.gz",
+            "extract": null,
+            "hash": "59725b2fe394af2e8b5d654ef1d432d9714f6689",
+            "time": 1794386415,
+            "version": "v1.2.1",
+            "config": {
+                "type": "ghtagtar",
+                "repo": "google/brotli",
+                "match": "v1\\.\\d.*"
+            },
+            "downloader": "StaticPHP\\Artifact\\Downloader\\Type\\GitHubTarball"
+        },
+        "binary": []
+    },
+    "frankenphp": {
+        "source": {
+            "lock_type": "source",
+            "cache_type": "local",
+            "dirname": "/go/src/app",
+            "extract": null,
+            "hash": null,
+            "time": 1794386415,
+            "version": null,
+            "config": {
+                "dirname": "/go/src/app"
+            },
+            "downloader": "StaticPHP\\Artifact\\Downloader\\Type\\LocalDir"
+        },
+        "binary": []
+    },
+    "libxml2": {
+        "source": {
+            "lock_type": "source",
+            "cache_type": "archive",
+            "filename": "GNOME-libxml2-v2.15.4-0-g9649899.tar.gz",
+            "extract": null,
+            "hash": "2bdd4831130636714412b93b78fecb30f0e00f6f",
+            "time": 1794386415,
+            "version": "v2.15.4",
+            "config": {
+                "type": "ghtagtar",
+                "repo": "GNOME/libxml2",
+                "match": "v2\\.\\d+\\.\\d+$"
+            },
+            "downloader": "StaticPHP\\Artifact\\Downloader\\Type\\GitHubTarball"
+        },
+        "binary": []
+    },
+    "watcher": {
+        "source": {
+            "lock_type": "source",
+            "cache_type": "archive",
+            "filename": "e-dant-watcher-release-0.14.5-0-g06f84a1.tar.gz",
+            "extract": null,
+            "hash": "89ba560e26de9b107de9aede4ab60592ec46618d",
+            "time": 1794386416,
+            "version": "0.14.5",
+            "config": {
+                "type": "ghtar",
+                "repo": "e-dant/watcher",
+                "prefer-stable": true
+            },
+            "downloader": "StaticPHP\\Artifact\\Downloader\\Type\\GitHubTarball"
+        },
+        "binary": []
+    },
+    "php-src": {
+        "source": {
+            "lock_type": "source",
+            "cache_type": "archive",
+            "filename": "php-8.5.12.tar.xz",
+            "extract": null,
+            "hash": "8b109435683351da5c2486ceb21d2311c3892244",
+            "time": 1794386416,
+            "version": "8.5.12",
+            "config": {
+                "type": "php-release",
+                "domain": "https://www.php.net"
+            },
+            "downloader": "StaticPHP\\Artifact\\Downloader\\Type\\PhpRelease"
+        },
+        "binary": []
+    },
+    "libiconv": {
+        "source": {
+            "lock_type": "source",
+            "cache_type": "archive",
+            "filename": "libiconv-1.19.1.tar.gz",
+            "extract": null,
+            "hash": "3f350c71067c4854cf03fac81ccd749b0be988b0",
+            "time": 1794386416,
+            "version": "1.19.1",
+            "config": {
+                "type": "filelist",
+                "url": "https://ftp.gnu.org/gnu/libiconv/",
+                "regex": "/href=\"(?<file>libiconv-(?<version>[^\"]+)\\.tar\\.gz)\"/"
+            },
+            "downloader": "StaticPHP\\Artifact\\Downloader\\Type\\FileList"
+        },
+        "binary": []
+    },
+    "onig": {
+        "source": {
+            "lock_type": "source",
+            "cache_type": "archive",
+            "filename": "onig-6.9.10.tar.gz",
+            "extract": null,
+            "hash": "bcada943679fa8cecfe359e57d785da9430dcdbc",
+            "time": 1794386417,
+            "version": "v6.9.10",
+            "config": {
+                "type": "ghrel",
+                "repo": "kkos/oniguruma",
+                "match": "onig-.+\\.tar\\.gz"
+            },
+            "downloader": "StaticPHP\\Artifact\\Downloader\\Type\\GitHubRelease"
+        },
+        "binary": []
+    },
+    "zlib": {
+        "source": {
+            "lock_type": "source",
+            "cache_type": "archive",
+            "filename": "zlib-1.4.tar.gz",
+            "extract": null,
+            "hash": "6bb95b58fb638ec49d921557bf66183baa4c6522",
+            "time": 1794386417,
+            "version": "v1.4",
+            "config": {
+                "type": "ghrel",
+                "repo": "madler/zlib",
+                "match": "zlib.+\\.tar\\.gz"
+            },
+            "downloader": "StaticPHP\\Artifact\\Downloader\\Type\\GitHubRelease"
+        },
+        "binary": []
+    },
+    "openssl": {
+        "source": {
+            "lock_type": "source",
+            "cache_type": "archive",
+            "filename": "openssl-3.6.5.tar.gz",
+            "extract": null,
+            "hash": "89256e2bf2e5c761c9b4c49925d816f0e3b25fe4",
+            "time": 1794386418,
+            "version": "openssl-3.6.5",
+            "config": {
+                "type": "ghrel",
+                "repo": "openssl/openssl",
+                "match": "openssl-3.+\\.tar\\.gz",
+                "prefer-stable": true
+            },
+            "downloader": "StaticPHP\\Artifact\\Downloader\\Type\\GitHubRelease"
+        },
+        "binary": []
+    },
+    "xz": {
+        "source": {
+            "lock_type": "source",
+            "cache_type": "archive",
+            "filename": "xz-5.8.4.tar.xz",
+            "extract": null,
+            "hash": "b1345221051ef5ac65297926418b56d2b941fe64",
+            "time": 1794386419,
+            "version": "v5.8.4",
+            "config": {
+                "type": "ghrel",
+                "repo": "tukaani-project/xz",
+                "match": "xz.+\\.tar\\.xz",
+                "prefer-stable": true
+            },
+            "downloader": "StaticPHP\\Artifact\\Downloader\\Type\\GitHubRelease"
+        },
+        "binary": []
+    },
+    "go-xcaddy": {
+        "source": null,
+        "binary": {
+            "linux-aarch64": {
+                "lock_type": "binary",
+                "cache_type": "archive",
+                "filename": "go1.27.4.linux-arm64.tar.gz",
+                "extract": "{pkg_root_path}/go-xcaddy",
+                "hash": "80c0deda6fbec5976137edafc02a82366e9ceda8",
+                "time": 1794386423,
+                "version": "go1.27.4",
+                "config": {
+                    "url": "https://go.dev/dl/go1.27.4.linux-arm64.tar.gz",
+                    "version": "go1.27.4"
+                },
+                "downloader": null,
+                "platform": "linux-aarch64"
+            }
+        }
+    }
+}
