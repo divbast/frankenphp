@@ -119,9 +119,13 @@ or whose records are for another app or architecture.
 
 - **Every merge to main** builds both architectures from scratch and
   publishes them.
-- **Every day at 12:13 UTC** both are rebuilt from scratch, and published
-  only if either architecture's manifest differs from the published one.
-  The run's summary says what moved.
+- **Every day at 12:13 UTC** both are rebuilt from scratch. When main has
+  moved past the published commit, as after a merge whose own publish
+  failed, the run publishes main. When main is still the published
+  commit, it publishes only if either architecture's manifest differs from
+  the published one, and the run's summary says what moved. Only this run
+  compares manifests: a merge's run, or a re-run of an older one, could
+  otherwise publish libraries fetched before the daily run's over them.
 - **A manual run** of `build` on main publishes at once.
 
 Both architectures of a run publish together, or neither does, and a tag

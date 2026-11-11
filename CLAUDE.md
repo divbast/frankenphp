@@ -72,9 +72,16 @@ this project's one record of LLM involvement.
   libraries come from the newest release that matches, and libaom from its
   main branch's head. That is how C-library fixes arrive, and Trivy cannot
   see those libraries in the binary. So the daily run rebuilds from scratch
-  and publishes when the manifest moved, and every run that can publish
-  builds without the cache, which would otherwise hold what an earlier run
-  fetched
+  and, when main is still the published commit, publishes when either
+  architecture's manifest moved; and every run that can publish builds
+  without the cache, which would otherwise hold what an earlier run fetched
+- **Only the daily rebuild of the published commit compares manifests.** A
+  merge's run that compared, racing the daily run on the same commit, or a
+  re-run of a publish job with its old carriers, would publish libraries its
+  build fetched earlier over what the daily run had just published: content
+  moving backwards within one commit. A push or a dispatch passes no
+  content change at all. `cmd/frankenphp-manifest/workflow_test.go` fails if
+  `build.yml` compares under any other condition
 - **The manifest leaves out what varies between identical builds.** Two
   builds of the same inputs differ only in the `time` fields of
   `spc-cache.json`; carrier digests always differ. A field added to the

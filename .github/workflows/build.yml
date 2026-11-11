@@ -23,8 +23,10 @@ on:
   schedule:
     # The daily rebuild, from scratch. spc resolves several C libraries to
     # their newest release, and libaom to its branch's head, while the build
-    # runs, so a rebuild of an unchanged main can hold different code. It
-    # publishes only when the version manifest of either architecture moved.
+    # runs, so a rebuild of an unchanged main can hold different code. When
+    # main is still the published commit, it publishes only when the version
+    # manifest of either architecture moved; when main has moved past it, as
+    # after a merge whose own publish failed, it publishes main.
     # 12:13 UTC, early enough that a start GitHub gives hours late still
     # lands before the apps' own daily slots, which take the new binary.
     - cron: '13 12 * * *'
@@ -141,7 +143,8 @@ jobs:
 
       # Refuses a binary that carries a file capability, which no app could
       # exec under --cap-drop ALL, and records of another app or
-      # architecture. The publish job compares what this prints.
+      # architecture. The daily run's publish job compares the same
+      # manifest with the published one's.
       - name: Read the carrier's manifest
         env:
           APP: ${{ matrix.app }}
@@ -238,11 +241,16 @@ jobs:
           name: carrier-${{ matrix.app }}-arm64
           path: /tmp/carriers/arm64
 
-      # Publish, skip or fail. A merge publishes. The daily run publishes
-      # when either architecture's manifest moved from what is published,
-      # and the button always does. Nothing moves the tag backwards: a run
-      # that built an older commit would take back what the newer one
-      # fixed. GH_TOKEN tells a private package from an absent one.
+      # Publish, skip or fail. A merge publishes its commit, and the button
+      # always publishes. The daily run publishes when main moved past what
+      # is published, and otherwise when either architecture's manifest
+      # moved from the published one. Only that run compares manifests: a
+      # merge's run, racing the daily run on the same commit, or a re-run
+      # with its old carriers, would otherwise publish libraries its build
+      # fetched earlier over what the daily run had just published. Nothing
+      # moves the tag back to an older commit either.
+      # cmd/frankenphp-manifest/workflow_test.go holds the condition below.
+      # GH_TOKEN tells a private package from an absent one.
       - name: Decide whether to publish
         id: decide
         env:
@@ -257,15 +265,15 @@ jobs:
             echo "::error::Cannot read what ${IMAGE}:${APP} was built from. If the package is private, as its first push can leave it, the owner makes it public in its settings (https://github.com/orgs/divbast/packages/container/frankenphp/settings); nothing in this workflow can."
             exit 1
           fi
-          change=""
-          if [ -n "${published}" ]; then
+          args=(-event "${EVENT}" -built "${GITHUB_SHA}" -published "${published}")
+          if [ "${EVENT}" = schedule ] && [ "${published}" = "${GITHUB_SHA}" ]; then
             # Every architecture, as an anonymous client pulls them
             skopeo copy --all --quiet --src-no-creds "docker://${IMAGE}:${APP}" oci-archive:/tmp/published.tar
             change=$(go run ./cmd/frankenphp-manifest -changes -app "${APP}" -published /tmp/published.tar \
               amd64=/tmp/carriers/amd64/carrier.tar arm64=/tmp/carriers/arm64/carrier.tar)
+            args+=(-content-change "${change}")
           fi
-          .ci/bin/divbast-publish-decision -event "${EVENT}" -built "${GITHUB_SHA}" \
-            -published "${published}" -content-change "${change}"
+          .ci/bin/divbast-publish-decision "${args[@]}"
 
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         if: steps.decide.outputs.publish == 'true'
