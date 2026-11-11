@@ -52,10 +52,14 @@ build-app APP:
 
 # Every lint gate
 lint:
-    {{ just_executable() }} actions-check workflow-audit actionlint shell-lint reuse-lint
+    {{ just_executable() }} actions-check workflow-audit actionlint shell-lint go-lint reuse-lint
     hadolint Containerfile
     # BuildKit's own checks. --check is a buildx flag, so this needs Docker
     docker build --check -f Containerfile .
 
+# Every test
+test:
+    {{ just_executable() }} go-test
+
 # Every gate. Run before committing
-ci: lint
+ci: lint test

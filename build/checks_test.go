@@ -1,0 +1,575 @@
+// SPDX-License-Identifier: BSD-2-Clause
+// SPDX-FileCopyrightText: 2026 Aryan Ameri <github@aryan.ameri.coffee>
+
+// Package build tests the scripts the Containerfile runs inside its build
+// stages. Each runs against fixtures, a stub frankenphp binary answering
+// from testdata or a static-php-cli checkout made for the test, and every
+// way each script can fail is seen failing.
+package build
+
+import (
+	"errors"
+	"io/fs"
+	"maps"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+	"testing"
+)
+
+// The versions the testdata binary reports, as the Containerfile's ARGs pin
+// them.
+var pins = map[string]string{
+	"PHP_VERSION":     "8.5.12",
+	"CADDY_VERSION":   "v2.11.9",
+	"CBROTLI_VERSION": "v1.0.1",
+	"MERCURE_VERSION": "v1.1.6",
+	"VULCAIN_VERSION": "v1.4.6",
+}
+
+// What the testdata binaries load and what LibreSpeed asks of gd, as
+// apps/*.env write them.
+const (
+	librespeedExtensions = "core,ctype,date,filter,frankenphp-cli,gd,hash,json,lexbor,opcache,openssl," +
+		"pcntl,pcre,pdo,pdo_sqlite,phar,posix,random,reflection,session,spl,sqlite3,standard,uri,zlib"
+	baikalExtensions = "core,ctype,date,dom,filter,frankenphp-cli,hash,iconv,json,lexbor,libxml,mbstring," +
+		"opcache,openssl,pcntl,pcre,pdo,pdo_sqlite,posix,random,reflection,session,simplexml,spl,sqlite3," +
+		"standard,tokenizer,uri,xml,xmlreader,xmlwriter,zlib"
+	librespeedGD = "FreeType Support,PNG Support"
+)
+
+// testCase is one run of a script.
+type testCase struct {
+	name string
+	// app names the testdata binary the stub answers as, LibreSpeed's when
+	// empty, and edits rewrite its canned answers.
+	app   string
+	edits []edit
+	// set adds or replaces inputs, and unset removes them.
+	set   map[string]string
+	unset []string
+	// mutate changes the fixture on disk, given the inputs naming it.
+	mutate func(t *testing.T, env map[string]string)
+	// want holds one string per ERROR line the script must print, each
+	// naming the ARG, extension or file at fault. Empty means it passes.
+	want []string
+}
+
+// edit rewrites one canned answer. from must match exactly once, so that a
+// fixture which drifts fails the test rather than passing it for the wrong
+// reason.
+type edit struct {
+	file, from, to string
+}
+
+// result is how a script ended.
+type result struct {
+	code           int
+	stdout, stderr string
+}
+
+func TestPinnedVersions(t *testing.T) {
+	t.Parallel()
+
+	tests := []testCase{
+		{name: "ok"},
+		{
+			name:  "php-mismatch",
+			edits: []edit{{"version", `PHP 8\.5\.12`, "PHP 8.5.11"}},
+			want:  []string{"PHP_VERSION"},
+		},
+		{
+			name:  "php-unreported",
+			edits: []edit{{"version", ` PHP 8\.5\.12`, ""}},
+			want:  []string{"PHP_VERSION"},
+		},
+		{
+			name:  "caddy-lifted",
+			edits: []edit{{"build-info", `(?m)^(dep\tgithub\.com/caddyserver/caddy/v2\t)v2\.11\.9\t`, "${1}v2.11.10\t"}},
+			want:  []string{"CADDY_VERSION"},
+		},
+		{
+			name:  "cbrotli-lifted",
+			edits: []edit{{"build-info", `(?m)^(dep\tgithub\.com/dunglas/caddy-cbrotli\t)v1\.0\.1\t`, "${1}v1.0.2\t"}},
+			want:  []string{"CBROTLI_VERSION"},
+		},
+		{
+			name:  "mercure-lifted",
+			edits: []edit{{"build-info", `(?m)^(dep\tgithub\.com/dunglas/mercure/caddy\t)v1\.1\.6\t`, "${1}v1.1.7\t"}},
+			want:  []string{"MERCURE_VERSION"},
+		},
+		{
+			name:  "plugin-missing",
+			edits: []edit{{"build-info", `(?m)^dep\tgithub\.com/dunglas/vulcain/caddy\t.*\n`, ""}},
+			want:  []string{"VULCAIN_VERSION"},
+		},
+		{
+			name:  "pin-unset",
+			unset: []string{"CADDY_VERSION"},
+			want:  []string{"CADDY_VERSION is empty"},
+		},
+		{
+			name: "no-binary",
+			set:  map[string]string{"FRANKENPHP_BIN": "/nonexistent/frankenphp"},
+			want: []string{"FRANKENPHP_BIN"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			env := stub(t, tt.app, tt.edits)
+			maps.Copy(env, pins)
+			check(t, run(t, "pinned-versions", tt.inputs(t, env)), tt.want)
+		})
+	}
+}
+
+func TestPinnedSPC(t *testing.T) {
+	t.Parallel()
+
+	tests := []testCase{
+		{name: "ok"},
+		{
+			// What build-static.sh leaves when dist/spc was not executable:
+			// its own download there, which records nothing.
+			name: "nightly-download",
+			mutate: func(t *testing.T, env map[string]string) {
+				t.Helper()
+				write(t, env["SPC_WRAPPER"], "\x7fELF\x02\x01\x01")
+				remove(t, env["SPC_CALLS"])
+			},
+			want: []string{"not the wrapper", "never ran spc craft"},
+		},
+		{
+			name: "never-crafted",
+			mutate: func(t *testing.T, env map[string]string) {
+				t.Helper()
+				write(t, env["SPC_CALLS"], "doctor\n")
+			},
+			want: []string{"never ran spc craft"},
+		},
+		{
+			name: "v3-clone",
+			mutate: func(t *testing.T, env map[string]string) {
+				t.Helper()
+				write(t, filepath.Join(env["SPC_CLONE"], "bin", "spc"), "<?php\n")
+			},
+			want: []string{"cloned static-php-cli"},
+		},
+		{
+			name: "commit-moved",
+			set:  map[string]string{"SPC_COMMIT": "ff04d4af9ba44f6c194239d733e0529cc6ddecea"},
+			want: []string{"pins ff04d4af9ba44f6c194239d733e0529cc6ddecea"},
+		},
+		{
+			name: "checkout-changed",
+			mutate: func(t *testing.T, env map[string]string) {
+				t.Helper()
+				write(t, filepath.Join(env["SPC_SRC"], "bin", "spc"), "<?php exit(0);\n")
+			},
+			want: []string{"changes to tracked files"},
+		},
+		{
+			name: "no-checkout",
+			mutate: func(t *testing.T, env map[string]string) {
+				t.Helper()
+				remove(t, filepath.Join(env["SPC_SRC"], ".git"))
+			},
+			want: []string{"no checkout"},
+		},
+		{
+			name:  "commit-unset",
+			unset: []string{"SPC_COMMIT"},
+			want:  []string{"SPC_COMMIT is empty"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := run(t, "pinned-spc", tt.inputs(t, spc(t)))
+			check(t, r, tt.want)
+			// Whatever went wrong, the fix is to the spc that SPC_COMMIT
+			// pins, so every complaint names it.
+			for _, line := range errorLines(r.stderr) {
+				if !strings.Contains(line, "SPC_COMMIT") {
+					t.Errorf("ERROR line does not name SPC_COMMIT: %q", line)
+				}
+			}
+		})
+	}
+}
+
+func TestExtensions(t *testing.T) {
+	t.Parallel()
+
+	tests := []testCase{
+		{name: "ok"},
+		{
+			name: "baikal",
+			app:  "baikal",
+			set: map[string]string{
+				"EXPECTED_EXTENSIONS":  baikalExtensions,
+				"REQUIRED_GD_FEATURES": "",
+			},
+		},
+		{
+			name:  "extra",
+			edits: []edit{{"extensions", `(?m)^Phar$`, "Phar\nintl"}},
+			want:  []string{"intl"},
+		},
+		{
+			name:  "missing",
+			edits: []edit{{"extensions", `(?m)^Phar\n`, ""}},
+			want:  []string{"phar"},
+		},
+		{
+			name:  "gd-feature-missing",
+			edits: []edit{{"gd", `(?m)^PNG Support\n`, ""}},
+			want:  []string{"PNG Support"},
+		},
+		{
+			name: "gd-absent",
+			edits: []edit{
+				{"extensions", `(?m)^gd\n`, ""},
+				{"gd", `(?s).+`, ""},
+			},
+			want: []string{"names gd,", "FreeType Support", "PNG Support"},
+		},
+		{
+			name:  "expected-unset",
+			unset: []string{"EXPECTED_EXTENSIONS"},
+			want:  []string{"EXPECTED_EXTENSIONS is empty"},
+		},
+		{
+			name: "no-binary",
+			set:  map[string]string{"FRANKENPHP_BIN": "/nonexistent/frankenphp"},
+			want: []string{"FRANKENPHP_BIN"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			env := stub(t, tt.app, tt.edits)
+			env["EXPECTED_EXTENSIONS"] = librespeedExtensions
+			env["REQUIRED_GD_FEATURES"] = librespeedGD
+			check(t, run(t, "extensions", tt.inputs(t, env)), tt.want)
+		})
+	}
+}
+
+func TestRecords(t *testing.T) {
+	t.Parallel()
+
+	const (
+		cache    = `{"php-src":{"source":{"version":"8.5.12"}}}` + "\n"
+		manifest = `{"schema-version":1}` + "\n"
+	)
+	tests := []testCase{
+		{name: "ok"},
+		{
+			name: "no-download-cache",
+			mutate: func(t *testing.T, env map[string]string) {
+				t.Helper()
+				remove(t, env["SPC_CACHE"])
+			},
+			want: []string{"download cache"},
+		},
+		{
+			name: "no-build-manifest",
+			mutate: func(t *testing.T, env map[string]string) {
+				t.Helper()
+				remove(t, env["BUILD_MANIFEST"])
+			},
+			want: []string{"build manifest"},
+		},
+		{
+			name: "records-exist",
+			mutate: func(t *testing.T, env map[string]string) {
+				t.Helper()
+				write(t, filepath.Join(env["RECORDS"], "app.txt"), "baikal\n")
+			},
+			want: []string{"already exists"},
+		},
+		{
+			// The binary failing part way through, once writing has begun
+			name: "binary-fails",
+			mutate: func(t *testing.T, env map[string]string) {
+				t.Helper()
+				remove(t, filepath.Join(env["STUB_ANSWERS"], "build-info"))
+			},
+			want: []string{"build-info.txt"},
+		},
+		{
+			name:  "app-unset",
+			unset: []string{"APP"},
+			want:  []string{"APP is empty"},
+		},
+		{
+			name: "no-binary",
+			set:  map[string]string{"FRANKENPHP_BIN": "/nonexistent/frankenphp"},
+			want: []string{"FRANKENPHP_BIN"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			env := stub(t, tt.app, tt.edits)
+			dist := t.TempDir()
+			env["APP"] = "librespeed"
+			env["SPC_CACHE"] = filepath.Join(dist, "downloads", ".cache.json")
+			env["BUILD_MANIFEST"] = filepath.Join(dist, "buildroot", "build-manifest.json")
+			env["RECORDS"] = filepath.Join(dist, "records")
+			write(t, env["SPC_CACHE"], cache)
+			write(t, env["BUILD_MANIFEST"], manifest)
+
+			env = tt.inputs(t, env)
+			before := tree(t, dist)
+			check(t, run(t, "records", env), tt.want)
+			if len(tt.want) > 0 {
+				// A record set is whole or absent: a failure leaves
+				// nothing behind for the carrier to ship part of.
+				if after := tree(t, dist); !slices.Equal(after, before) {
+					t.Errorf("after a failure the build holds %q, want %q as before", after, before)
+				}
+				return
+			}
+
+			extensions := strings.Split(strings.TrimSuffix(read(t, "testdata/librespeed/extensions"), "\n"), "\n")
+			slices.Sort(extensions)
+			want := map[string]string{
+				"app.txt":             "librespeed\n",
+				"version.txt":         read(t, "testdata/librespeed/version"),
+				"build-info.txt":      read(t, "testdata/librespeed/build-info"),
+				"extensions.txt":      strings.Join(extensions, "\n") + "\n",
+				"spc-cache.json":      cache,
+				"build-manifest.json": manifest,
+			}
+			entries, err := os.ReadDir(env["RECORDS"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, e := range entries {
+				got = append(got, e.Name())
+			}
+			if names := slices.Sorted(maps.Keys(want)); !slices.Equal(got, names) {
+				t.Fatalf("records = %q, want %q", got, names)
+			}
+			for name, content := range want {
+				if got := read(t, filepath.Join(env["RECORDS"], name)); got != content {
+					t.Errorf("%s = %q, want %q", name, got, content)
+				}
+			}
+		})
+	}
+}
+
+// stub copies testdata/<app>'s canned answers, LibreSpeed's when app is
+// empty, where the stub binary reads them, applies edits to them, and
+// returns the inputs that point a script at the stub.
+func stub(t *testing.T, app string, edits []edit) map[string]string {
+	t.Helper()
+
+	if app == "" {
+		app = "librespeed"
+	}
+	answers := t.TempDir()
+	if err := os.CopyFS(answers, os.DirFS(filepath.Join("testdata", app))); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range edits {
+		path := filepath.Join(answers, e.file)
+		data := read(t, path)
+		re := regexp.MustCompile(e.from)
+		if n := len(re.FindAllStringIndex(data, -1)); n != 1 {
+			t.Fatalf("edit %q matches testdata/%s/%s %d times, want once", e.from, app, e.file, n)
+		}
+		write(t, path, re.ReplaceAllString(data, e.to))
+	}
+	bin, err := filepath.Abs(filepath.Join("testdata", "frankenphp.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return map[string]string{"FRANKENPHP_BIN": bin, "STUB_ANSWERS": answers}
+}
+
+// spc makes what the Containerfile leaves for pinned-spc.sh: a
+// static-php-cli checkout at one commit, the wrapper around it at dist/spc
+// and the wrapper's record of one craft run. It returns the inputs naming
+// them.
+func spc(t *testing.T) map[string]string {
+	t.Helper()
+
+	root := t.TempDir()
+	src := filepath.Join(root, "static-php-cli")
+	dist := filepath.Join(root, "dist")
+	write(t, filepath.Join(src, "bin", "spc"), "<?php\n")
+	git(t, "init", "-q", src)
+	git(t, "-C", src, "add", ".")
+	git(t, "-C", src, "commit", "-q", "-m", "spc")
+	// The wrapper, line for line as the Containerfile writes it.
+	write(t, filepath.Join(dist, "spc"), "#!/bin/sh\n"+
+		`echo "$1" >>`+filepath.Join(dist, "spc.calls")+"\n"+
+		"exec php "+src+`/bin/spc "$@"`+"\n")
+	write(t, filepath.Join(dist, "spc.calls"), "craft\n")
+	return map[string]string{
+		"SPC_COMMIT":  strings.TrimSpace(git(t, "-C", src, "rev-parse", "HEAD")),
+		"SPC_SRC":     src,
+		"SPC_WRAPPER": filepath.Join(dist, "spc"),
+		"SPC_CALLS":   filepath.Join(dist, "spc.calls"),
+		"SPC_CLONE":   filepath.Join(dist, "static-php-cli"),
+	}
+}
+
+// tree lists every path under root, sorted.
+func tree(t *testing.T, root string) []string {
+	t.Helper()
+
+	var paths []string
+	err := filepath.WalkDir(root, func(path string, _ fs.DirEntry, err error) error {
+		paths = append(paths, path)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return paths
+}
+
+// inputs applies tt's input changes and fixture mutation to env.
+func (tt *testCase) inputs(t *testing.T, env map[string]string) map[string]string {
+	t.Helper()
+
+	maps.Copy(env, tt.set)
+	for _, name := range tt.unset {
+		delete(env, name)
+	}
+	if tt.mutate != nil {
+		tt.mutate(t, env)
+	}
+	return env
+}
+
+// run runs ./<script>.sh with env as its environment, beside a PATH and a
+// git that reads no configuration but its own.
+func run(t *testing.T, script string, env map[string]string) result {
+	t.Helper()
+
+	cmd := exec.CommandContext(t.Context(), "./"+script+".sh") //nolint:gosec // G204: the script is one of this package's own
+	cmd.Env = isolated(t)
+	for name, value := range env {
+		cmd.Env = append(cmd.Env, name+"="+value)
+	}
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		if _, ok := errors.AsType[*exec.ExitError](err); !ok {
+			t.Fatalf("%s.sh: %v", script, err)
+		}
+	}
+	return result{cmd.ProcessState.ExitCode(), stdout.String(), stderr.String()}
+}
+
+// check fails t unless r passed silently, when want is empty, or else
+// failed with exactly one ERROR line for each string in want, naming it.
+func check(t *testing.T, r result, want []string) {
+	t.Helper()
+
+	if len(want) == 0 {
+		if r.code != 0 || r.stderr != "" {
+			t.Fatalf("exit %d, want 0 with nothing on stderr; stderr:\n%s", r.code, r.stderr)
+		}
+		return
+	}
+	if r.code == 0 {
+		t.Fatalf("exit 0, want a failure naming %q; stdout:\n%s", want, r.stdout)
+	}
+	lines := errorLines(r.stderr)
+	if len(lines) != len(want) {
+		t.Errorf("%d ERROR lines, want %d naming %q; stderr:\n%s", len(lines), len(want), want, r.stderr)
+	}
+	for _, w := range want {
+		if !slices.ContainsFunc(lines, func(line string) bool { return strings.Contains(line, w) }) {
+			t.Errorf("no ERROR line names %q; stderr:\n%s", w, r.stderr)
+		}
+	}
+}
+
+// errorLines returns the lines of stderr that report a failure.
+func errorLines(stderr string) []string {
+	var lines []string
+	for line := range strings.Lines(stderr) {
+		if strings.HasPrefix(line, "ERROR: ") {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+// isolated is the environment every command here starts from, so nothing
+// of the host's reaches a script but its PATH.
+func isolated(t *testing.T) []string {
+	t.Helper()
+
+	return []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + t.TempDir(),
+		"GIT_CONFIG_GLOBAL=" + os.DevNull,
+		"GIT_CONFIG_NOSYSTEM=1",
+	}
+}
+
+// git runs git with args, and returns its output.
+func git(t *testing.T, args ...string) string {
+	t.Helper()
+
+	cmd := exec.CommandContext(t.Context(), "git", args...) //nolint:gosec // G204: git, with this file's own arguments
+	cmd.Env = append(isolated(t),
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.invalid",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.invalid")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %q: %v", args, err)
+	}
+	return string(out)
+}
+
+func read(t *testing.T, path string) string {
+	t.Helper()
+
+	data, err := os.ReadFile(path) //nolint:gosec // G304: testdata, or a file the test made in its own TempDir
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func write(t *testing.T, path, content string) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func remove(t *testing.T, path string) {
+	t.Helper()
+
+	if err := os.RemoveAll(path); err != nil {
+		t.Fatal(err)
+	}
+}
