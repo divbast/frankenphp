@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-FileCopyrightText: 2026 Aryan Ameri <github@aryan.ameri.coffee>
+
+# The daily stall check, through divbast/ci's stall.yml: a Renovate pull
+# request that never goes green or never finishes, Renovate itself silent,
+# or daily slots that should have published one app's binary and did not.
+# A scheduled run's failure goes to whoever last edited the cron line below.
+
+name: stall
+
+on:
+  schedule:
+    # Clear of the other repositories' stall checks, so none start
+    # together.
+    - cron: '53 12 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+# One run at a time; a second has nothing to add to the first.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  stall:
+    name: stall
+    uses: divbast/ci/.github/workflows/stall.yml@d85c5b730d779272e44c231fd5ed808d952b10a3 # v1.3.0
+    with:
+      checks: '["open","stuck","renovate"]'
+    # Everything stall.yml's job asks for, since a called job gets no more
+    # than its caller grants, even what a check this job skips would need.
+    permissions:
+      contents: read # read main, compare commits, the repository's age
+      pull-requests: read # list Renovate's pull requests
+      actions: read # list the Renovate and slot runs
+      checks: read # read each pull request's check runs
+      statuses: read # and its commit statuses
+      packages: read # tell a private image from an absent one, for slots
+
+  # One slots job per tag, since each app's binary publishes on its own.
+  slots-baikal:
+    name: slots (baikal)
+    uses: divbast/ci/.github/workflows/stall.yml@d85c5b730d779272e44c231fd5ed808d952b10a3 # v1.3.0
+    with:
+      checks: '["slots"]'
+      published: ghcr.io/divbast/frankenphp:baikal
+    permissions:
+      contents: read # read main, compare commits, the repository's age
+      pull-requests: read # list Renovate's pull requests
+      actions: read # list the Renovate and slot runs
+      checks: read # read each pull request's check runs
+      statuses: read # and its commit statuses
+      packages: read # tell a private image from an absent one, for slots
+
+  slots-librespeed:
+    name: slots (librespeed)
+    uses: divbast/ci/.github/workflows/stall.yml@d85c5b730d779272e44c231fd5ed808d952b10a3 # v1.3.0
+    with:
+      checks: '["slots"]'
+      published: ghcr.io/divbast/frankenphp:librespeed
+    permissions:
+      contents: read # read main, compare commits, the repository's age
+      pull-requests: read # list Renovate's pull requests
+      actions: read # list the Renovate and slot runs
+      checks: read # read each pull request's check runs
+      statuses: read # and its commit statuses
+      packages: read # tell a private image from an absent one, for slots

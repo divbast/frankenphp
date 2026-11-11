@@ -1,0 +1,252 @@
+{
+    "schema-version": 1,
+    "spc-version": "3.0.0-alpha1",
+    "target": {
+        "platform": "linux-aarch64",
+        "os": "Linux",
+        "architecture": "aarch64",
+        "libc": "glibc",
+        "libc-version": "2.28",
+        "spc-target": null,
+        "toolchain": "StaticPHP\\Toolchain\\GccNativeToolchain"
+    },
+    "requested-packages": {
+        "build": [
+            "php"
+        ],
+        "install": [
+            "frankenphp"
+        ]
+    },
+    "packages": [
+        {
+            "name": "go-xcaddy",
+            "type": "tool",
+            "artifact": "go-xcaddy"
+        },
+        {
+            "name": "libiconv",
+            "type": "library",
+            "artifact": "libiconv"
+        },
+        {
+            "name": "zlib",
+            "type": "library",
+            "artifact": "zlib"
+        },
+        {
+            "name": "xz",
+            "type": "library",
+            "artifact": "xz"
+        },
+        {
+            "name": "libxml2",
+            "type": "library",
+            "artifact": "libxml2"
+        },
+        {
+            "name": "ext-libxml",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-xml",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-dom",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-pdo",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "sqlite",
+            "type": "library",
+            "artifact": "sqlite"
+        },
+        {
+            "name": "ext-sqlite3",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-pdo_sqlite",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-zlib",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-mbstring",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "onig",
+            "type": "library",
+            "artifact": "onig"
+        },
+        {
+            "name": "ext-mbregex",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-iconv",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-session",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-xmlreader",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-xmlwriter",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-simplexml",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-filter",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-tokenizer",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-ctype",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-pcntl",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-posix",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-opcache",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "openssl",
+            "type": "library",
+            "artifact": "openssl"
+        },
+        {
+            "name": "ext-openssl",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "watcher",
+            "type": "library",
+            "artifact": "watcher"
+        },
+        {
+            "name": "brotli",
+            "type": "library",
+            "artifact": "brotli"
+        },
+        {
+            "name": "php",
+            "type": "target",
+            "artifact": "php-src"
+        },
+        {
+            "name": "php-embed",
+            "type": "virtual-target",
+            "artifact": null
+        },
+        {
+            "name": "frankenphp",
+            "type": "target",
+            "artifact": "frankenphp"
+        }
+    ],
+    "targets": {
+        "php": {
+            "version": "8.5.12",
+            "thread-safety": "zts",
+            "sapis": [
+                "embed",
+                "frankenphp"
+            ],
+            "extensions": {
+                "all": [
+                    "libxml",
+                    "xml",
+                    "dom",
+                    "pdo",
+                    "sqlite3",
+                    "pdo_sqlite",
+                    "zlib",
+                    "mbstring",
+                    "mbregex",
+                    "iconv",
+                    "session",
+                    "xmlreader",
+                    "xmlwriter",
+                    "simplexml",
+                    "filter",
+                    "tokenizer",
+                    "ctype",
+                    "pcntl",
+                    "posix",
+                    "opcache",
+                    "openssl"
+                ],
+                "static": [
+                    "libxml",
+                    "xml",
+                    "dom",
+                    "pdo",
+                    "sqlite3",
+                    "pdo_sqlite",
+                    "zlib",
+                    "mbstring",
+                    "mbregex",
+                    "iconv",
+                    "session",
+                    "xmlreader",
+                    "xmlwriter",
+                    "simplexml",
+                    "filter",
+                    "tokenizer",
+                    "ctype",
+                    "pcntl",
+                    "posix",
+                    "opcache",
+                    "openssl"
+                ],
+                "shared": []
+            }
+        }
+    }
+}

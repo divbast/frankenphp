@@ -1,0 +1,226 @@
+{
+    "schema-version": 1,
+    "spc-version": "3.0.0-alpha1",
+    "target": {
+        "platform": "linux-aarch64",
+        "os": "Linux",
+        "architecture": "aarch64",
+        "libc": "glibc",
+        "libc-version": "2.28",
+        "spc-target": null,
+        "toolchain": "StaticPHP\\Toolchain\\GccNativeToolchain"
+    },
+    "requested-packages": {
+        "build": [
+            "php"
+        ],
+        "install": [
+            "frankenphp"
+        ]
+    },
+    "packages": [
+        {
+            "name": "go-xcaddy",
+            "type": "tool",
+            "artifact": "go-xcaddy"
+        },
+        {
+            "name": "ext-ctype",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-filter",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "zlib",
+            "type": "library",
+            "artifact": "zlib"
+        },
+        {
+            "name": "openssl",
+            "type": "library",
+            "artifact": "openssl"
+        },
+        {
+            "name": "ext-zlib",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-openssl",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-phar",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-pdo",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "sqlite",
+            "type": "library",
+            "artifact": "sqlite"
+        },
+        {
+            "name": "ext-sqlite3",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-pdo_sqlite",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-session",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "libpng",
+            "type": "library",
+            "artifact": "libpng"
+        },
+        {
+            "name": "libaom",
+            "type": "library",
+            "artifact": "libaom"
+        },
+        {
+            "name": "libwebp",
+            "type": "library",
+            "artifact": "libwebp"
+        },
+        {
+            "name": "libjpeg",
+            "type": "library",
+            "artifact": "libjpeg"
+        },
+        {
+            "name": "libiconv",
+            "type": "library",
+            "artifact": "libiconv"
+        },
+        {
+            "name": "xz",
+            "type": "library",
+            "artifact": "xz"
+        },
+        {
+            "name": "libxml2",
+            "type": "library",
+            "artifact": "libxml2"
+        },
+        {
+            "name": "libavif",
+            "type": "library",
+            "artifact": "libavif"
+        },
+        {
+            "name": "bzip2",
+            "type": "library",
+            "artifact": "bzip2"
+        },
+        {
+            "name": "brotli",
+            "type": "library",
+            "artifact": "brotli"
+        },
+        {
+            "name": "freetype",
+            "type": "library",
+            "artifact": "freetype"
+        },
+        {
+            "name": "ext-gd",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-pcntl",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-posix",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "ext-opcache",
+            "type": "php-extension",
+            "artifact": null
+        },
+        {
+            "name": "watcher",
+            "type": "library",
+            "artifact": "watcher"
+        },
+        {
+            "name": "php",
+            "type": "target",
+            "artifact": "php-src"
+        },
+        {
+            "name": "php-embed",
+            "type": "virtual-target",
+            "artifact": null
+        },
+        {
+            "name": "frankenphp",
+            "type": "target",
+            "artifact": "frankenphp"
+        }
+    ],
+    "targets": {
+        "php": {
+            "version": "8.5.12",
+            "thread-safety": "zts",
+            "sapis": [
+                "embed",
+                "frankenphp"
+            ],
+            "extensions": {
+                "all": [
+                    "ctype",
+                    "filter",
+                    "zlib",
+                    "openssl",
+                    "phar",
+                    "pdo",
+                    "sqlite3",
+                    "pdo_sqlite",
+                    "session",
+                    "gd",
+                    "pcntl",
+                    "posix",
+                    "opcache"
+                ],
+                "static": [
+                    "ctype",
+                    "filter",
+                    "zlib",
+                    "openssl",
+                    "phar",
+                    "pdo",
+                    "sqlite3",
+                    "pdo_sqlite",
+                    "session",
+                    "gd",
+                    "pcntl",
+                    "posix",
+                    "opcache"
+                ],
+                "shared": []
+            }
+        }
+    }
+}

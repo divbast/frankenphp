@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-FileCopyrightText: 2026 Aryan Ameri <github@aryan.ameri.coffee>
+
+# The Containerfile copies only the scripts it names. Neither of these ever
+# belongs in the build context.
+.ci/
+dist/
