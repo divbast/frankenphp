@@ -296,6 +296,28 @@ func TestRecords(t *testing.T) {
 			want: []string{"build-info.txt"},
 		},
 		{
+			// go failing to read xcaddy's build info, once writing has begun
+			name: "go-fails",
+			mutate: func(t *testing.T, env map[string]string) {
+				t.Helper()
+				remove(t, filepath.Join(env["STUB_ANSWERS"], "xcaddy"))
+			},
+			want: []string{"xcaddy.txt"},
+		},
+		{
+			name: "no-xcaddy",
+			mutate: func(t *testing.T, env map[string]string) {
+				t.Helper()
+				remove(t, env["XCADDY_BIN"])
+			},
+			want: []string{"XCADDY_BIN"},
+		},
+		{
+			name: "no-go",
+			set:  map[string]string{"GO_BIN": "/nonexistent/go"},
+			want: []string{"GO_BIN"},
+		},
+		{
 			name:  "app-unset",
 			unset: []string{"APP"},
 			want:  []string{"APP is empty"},
@@ -305,6 +327,10 @@ func TestRecords(t *testing.T) {
 			set:  map[string]string{"FRANKENPHP_BIN": "/nonexistent/frankenphp"},
 			want: []string{"FRANKENPHP_BIN"},
 		},
+	}
+	goStub, err := filepath.Abs(filepath.Join("testdata", "go.sh"))
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	for _, tt := range tests {
@@ -316,9 +342,14 @@ func TestRecords(t *testing.T) {
 			env["APP"] = "librespeed"
 			env["SPC_CACHE"] = filepath.Join(dist, "downloads", ".cache.json")
 			env["BUILD_MANIFEST"] = filepath.Join(dist, "buildroot", "build-manifest.json")
+			// spc's go-xcaddy package: the go that reads xcaddy's build
+			// info, and xcaddy, which only that go looks at
+			env["GO_BIN"] = goStub
+			env["XCADDY_BIN"] = filepath.Join(dist, "pkgroot", "go-xcaddy", "bin", "xcaddy")
 			env["RECORDS"] = filepath.Join(dist, "records")
 			write(t, env["SPC_CACHE"], cache)
 			write(t, env["BUILD_MANIFEST"], manifest)
+			write(t, env["XCADDY_BIN"], "\x7fELF not really")
 
 			env = tt.inputs(t, env)
 			before := tree(t, dist)
@@ -338,6 +369,7 @@ func TestRecords(t *testing.T) {
 				"app.txt":             "librespeed\n",
 				"version.txt":         read(t, "testdata/librespeed/version"),
 				"build-info.txt":      read(t, "testdata/librespeed/build-info"),
+				"xcaddy.txt":          read(t, "testdata/librespeed/xcaddy"),
 				"extensions.txt":      strings.Join(extensions, "\n") + "\n",
 				"spc-cache.json":      cache,
 				"build-manifest.json": manifest,

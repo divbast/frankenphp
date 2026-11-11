@@ -111,9 +111,13 @@ RUN FRANKENPHP_BIN=/go/src/app/dist/frankenphp /tmp/extensions.sh
 FROM build AS records
 ARG APP
 COPY --chmod=0755 build/records.sh /tmp/records.sh
+# go-xcaddy is spc's package of the Go toolchain and the xcaddy that built
+# the binary, under the builder's PKG_ROOT_PATH.
 RUN FRANKENPHP_BIN=/go/src/app/dist/frankenphp \
     SPC_CACHE=/go/src/app/dist/downloads/.cache.json \
     BUILD_MANIFEST=/go/src/app/dist/buildroot/build-manifest.json \
+    GO_BIN=/opt/spc-pkgroot/go-xcaddy/bin/go \
+    XCADDY_BIN=/opt/spc-pkgroot/go-xcaddy/bin/xcaddy \
     RECORDS=/records \
     /tmp/records.sh
 

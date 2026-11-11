@@ -50,12 +50,16 @@ func carrier(t *testing.T, app, arch string, edit func(*manifesttest.Image)) str
 }
 
 // published writes one app's published index, with an image for each of
-// arches.
-func published(t *testing.T, app string, arches ...string) string {
+// arches, each changed by edit if it is not nil.
+func published(t *testing.T, app string, edit func(*manifesttest.Image), arches ...string) string {
 	t.Helper()
 	var a manifesttest.Archive
 	for _, arch := range arches {
-		a.Images = append(a.Images, manifesttest.Image{Arch: arch, Records: records(t, app, arch)})
+		img := manifesttest.Image{Arch: arch, Records: records(t, app, arch)}
+		if edit != nil {
+			edit(&img)
+		}
+		a.Images = append(a.Images, img)
 	}
 	return manifesttest.Write(t, a)
 }
@@ -68,9 +72,9 @@ func (f fixture) carrier(app, arch string, edit func(*manifesttest.Image)) strin
 	return carrier(f.t, app, arch, edit)
 }
 
-func (f fixture) published(app string, arches ...string) string {
+func (f fixture) published(app string, edit func(*manifesttest.Image), arches ...string) string {
 	f.t.Helper()
-	return published(f.t, app, arches...)
+	return published(f.t, app, edit, arches...)
 }
 
 func (f fixture) json(m *manifest.Manifest) string {
@@ -87,6 +91,18 @@ func (f fixture) file(data string) string {
 func moved(img *manifesttest.Image) {
 	img.Records["spc-cache.json"] = bytes.Replace(img.Records["spc-cache.json"],
 		[]byte(`"version": "dev-main+8a10385"`), []byte(`"version": "dev-main+81c2f0e"`), 1)
+}
+
+// xcaddyMoved is a carrier built by an xcaddy that moved a commit past
+// v0.4.7 on its master branch.
+func xcaddyMoved(img *manifesttest.Image) {
+	img.Records["xcaddy.txt"] = bytes.Replace(img.Records["xcaddy.txt"],
+		[]byte("xcaddy\tv0.4.7\t"), []byte("xcaddy\tv0.4.8-0.20261112093000-0123456789ab\t"), 1)
+}
+
+// unrecorded is a carrier from before the build recorded xcaddy.
+func unrecorded(img *manifesttest.Image) {
+	delete(img.Records, "xcaddy.txt")
 }
 
 func capability(img *manifesttest.Image) {
@@ -280,7 +296,7 @@ func TestRunChanges(t *testing.T) {
 			name: "nothing-moved",
 			args: func(f fixture) []string {
 				return []string{
-					"-changes", "-app", "librespeed", "-published", f.published("librespeed", "amd64", "arm64"),
+					"-changes", "-app", "librespeed", "-published", f.published("librespeed", nil, "amd64", "arm64"),
 					"amd64=" + f.carrier("librespeed", "amd64", nil), "arm64=" + f.carrier("librespeed", "arm64", nil),
 				}
 			},
@@ -290,7 +306,7 @@ func TestRunChanges(t *testing.T) {
 			name: "arm64-moved",
 			args: func(f fixture) []string {
 				return []string{
-					"-changes", "-app", "librespeed", "-published", f.published("librespeed", "amd64", "arm64"),
+					"-changes", "-app", "librespeed", "-published", f.published("librespeed", nil, "amd64", "arm64"),
 					"amd64=" + f.carrier("librespeed", "amd64", nil), "arm64=" + f.carrier("librespeed", "arm64", moved),
 				}
 			},
@@ -298,10 +314,39 @@ func TestRunChanges(t *testing.T) {
 			wantStdout: "arm64: library libaom: dev-main+8a10385@8a1038536cde81c548341145f40d6dfddc3077d6 → dev-main+81c2f0e@8a1038536cde81c548341145f40d6dfddc3077d6\n",
 		},
 		{
+			// Both architectures, as every build of a day installs the
+			// same xcaddy
+			name: "xcaddy-moved",
+			args: func(f fixture) []string {
+				return []string{
+					"-changes", "-app", "librespeed", "-published", f.published("librespeed", nil, "amd64", "arm64"),
+					"amd64=" + f.carrier("librespeed", "amd64", xcaddyMoved), "arm64=" + f.carrier("librespeed", "arm64", xcaddyMoved),
+				}
+			},
+			wantCode: 0,
+			wantStdout: "amd64: xcaddy: v0.4.7 → v0.4.8-0.20261112093000-0123456789ab\n" +
+				"arm64: xcaddy: v0.4.7 → v0.4.8-0.20261112093000-0123456789ab\n",
+		},
+		{
+			// Refused, as any published carrier missing a record is: the
+			// daily run compares only a published image built from main's
+			// own commit, and every one built since xcaddy is recorded
+			// holds it.
+			name: "published-without-xcaddy",
+			args: func(f fixture) []string {
+				return []string{
+					"-changes", "-app", "librespeed", "-published", f.published("librespeed", unrecorded, "amd64", "arm64"),
+					"amd64=" + f.carrier("librespeed", "amd64", nil), "arm64=" + f.carrier("librespeed", "arm64", nil),
+				}
+			},
+			wantCode:   1,
+			wantStderr: "xcaddy.txt",
+		},
+		{
 			name: "amd64-unpublished",
 			args: func(f fixture) []string {
 				return []string{
-					"-changes", "-app", "librespeed", "-published", f.published("librespeed", "arm64"),
+					"-changes", "-app", "librespeed", "-published", f.published("librespeed", nil, "arm64"),
 					"amd64=" + f.carrier("librespeed", "amd64", nil), "arm64=" + f.carrier("librespeed", "arm64", nil),
 				}
 			},
@@ -323,7 +368,7 @@ func TestRunChanges(t *testing.T) {
 			name: "arm64-missing",
 			args: func(f fixture) []string {
 				return []string{
-					"-changes", "-app", "librespeed", "-published", f.published("librespeed", "amd64", "arm64"),
+					"-changes", "-app", "librespeed", "-published", f.published("librespeed", nil, "amd64", "arm64"),
 					"amd64=" + f.carrier("librespeed", "amd64", nil),
 				}
 			},
@@ -334,7 +379,7 @@ func TestRunChanges(t *testing.T) {
 			name: "candidate-capability",
 			args: func(f fixture) []string {
 				return []string{
-					"-changes", "-app", "librespeed", "-published", f.published("librespeed", "amd64", "arm64"),
+					"-changes", "-app", "librespeed", "-published", f.published("librespeed", nil, "amd64", "arm64"),
 					"amd64=" + f.carrier("librespeed", "amd64", capability), "arm64=" + f.carrier("librespeed", "arm64", nil),
 				}
 			},
@@ -345,7 +390,7 @@ func TestRunChanges(t *testing.T) {
 			name: "candidate-another-app",
 			args: func(f fixture) []string {
 				return []string{
-					"-changes", "-app", "librespeed", "-published", f.published("librespeed", "amd64", "arm64"),
+					"-changes", "-app", "librespeed", "-published", f.published("librespeed", nil, "amd64", "arm64"),
 					"amd64=" + f.carrier("librespeed", "amd64", nil), "arm64=" + f.carrier("baikal", "arm64", nil),
 				}
 			},
@@ -356,7 +401,7 @@ func TestRunChanges(t *testing.T) {
 			name: "published-another-app",
 			args: func(f fixture) []string {
 				return []string{
-					"-changes", "-app", "librespeed", "-published", f.published("baikal", "amd64", "arm64"),
+					"-changes", "-app", "librespeed", "-published", f.published("baikal", nil, "amd64", "arm64"),
 					"amd64=" + f.carrier("librespeed", "amd64", nil), "arm64=" + f.carrier("librespeed", "arm64", nil),
 				}
 			},

@@ -6,19 +6,23 @@
 // between two of them.
 //
 // A manifest is what the daily rebuild compares with the published carrier
-// to decide whether to publish. spc resolves several C libraries to their
-// newest release, and libaom to its branch's head, while the build runs, so
-// two builds of one commit can hold different code without a commit to show
-// for it; nothing else in the image says so, and Trivy cannot see the
-// libraries in the binary.
+// to decide whether to publish. spc resolves the Go toolchain to the newest
+// release, xcaddy to its master branch's head whenever that Go is newer than
+// the builder image's, several C libraries to their newest release, and
+// libaom to its branch's head, while the build runs, so two builds of one
+// commit can hold different code without a commit to show for it; nothing
+// else in the image says so, and Trivy cannot see the libraries in the
+// binary.
 //
 // It holds what decides the binary's code, and nothing that differs between
 // two builds of the same inputs: FrankenPHP, PHP and Caddy as the binary
 // reports them, the Go toolchain and every Go module it was built from, the
-// PHP modules it loads, and each C library spc built, as the version it
-// resolved and the hash of the source it fetched. It leaves out the time spc
-// fetched each source, the records' file times, the build's flags, and
-// spc's resolver rules, which change only with the spc commit.
+// xcaddy that wrote its main module and ran its build, the PHP modules it
+// loads, and each C library spc built, as the version it resolved and the
+// hash of the source it fetched. It leaves out the time spc fetched each
+// source, the records' file times, the build's flags, which follow from
+// the spc commit, the toolchain and xcaddy, and spc's resolver rules, which
+// change only with the spc commit.
 package manifest
 
 import (
@@ -37,7 +41,8 @@ import (
 )
 
 // SchemaVersion is the Schema every Manifest this package makes carries.
-const SchemaVersion = 1
+// Version 2 added Xcaddy.
+const SchemaVersion = 2
 
 // Manifest is what went into one app's binary for one architecture.
 type Manifest struct {
@@ -54,6 +59,11 @@ type Manifest struct {
 	Caddy      string `json:"caddy"`
 	// Go is the toolchain that built it, such as go1.27.4.
 	Go string `json:"go"`
+	// Xcaddy is the version of the xcaddy module that wrote the binary's
+	// main module and ran its build, as Go records it: a release, such as
+	// v0.4.7, or a pseudo-version naming a commit of xcaddy's master
+	// branch, the one spc installed or else the builder image's own.
+	Xcaddy string `json:"xcaddy"`
 	// Extensions are the PHP modules it loads, as PHP names them, sorted.
 	Extensions []string `json:"extensions"`
 	// Libraries maps each C library spc built, and any PHP extension it
@@ -72,6 +82,7 @@ const (
 	recordApp           = "app.txt"
 	recordVersion       = "version.txt"
 	recordBuildInfo     = "build-info.txt"
+	recordXcaddy        = "xcaddy.txt"
 	recordExtensions    = "extensions.txt"
 	recordSPCCache      = "spc-cache.json"
 	recordBuildManifest = "build-manifest.json"
@@ -87,7 +98,7 @@ func FromRecords(root *os.Root) (Manifest, error) {
 func parse(read func(name string) ([]byte, error)) (Manifest, error) {
 	files := map[string][]byte{}
 	var errs []error
-	for _, name := range []string{recordApp, recordVersion, recordBuildInfo, recordExtensions, recordSPCCache, recordBuildManifest} {
+	for _, name := range []string{recordApp, recordVersion, recordBuildInfo, recordXcaddy, recordExtensions, recordSPCCache, recordBuildManifest} {
 		data, err := read(name)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("read the record %s: %w", name, err))
@@ -107,6 +118,9 @@ func parse(read func(name string) ([]byte, error)) (Manifest, error) {
 		errs = append(errs, err)
 	}
 	if m.Go, m.Arch, m.GoModules, err = parseBuildInfo(files[recordBuildInfo]); err != nil {
+		errs = append(errs, err)
+	}
+	if m.Xcaddy, err = parseXcaddy(files[recordXcaddy]); err != nil {
 		errs = append(errs, err)
 	}
 	if m.Extensions, err = parseExtensions(files[recordExtensions]); err != nil {
@@ -188,6 +202,34 @@ func parseBuildInfo(data []byte) (toolchain, arch string, modules map[string]str
 		return "", "", nil, err
 	}
 	return toolchain, arch, modules, nil
+}
+
+// xcaddyModule is the module xcaddy is built from.
+const xcaddyModule = "github.com/caddyserver/xcaddy"
+
+// parseXcaddy reads `go version -m` of spc's xcaddy: a line naming the
+// file and its toolchain, then tab-indented lines of path, mod, dep and
+// build. It returns the version on the one mod line, xcaddy's own.
+func parseXcaddy(data []byte) (string, error) {
+	var versions []string
+	for line := range strings.Lines(string(data)) {
+		fields := strings.Split(strings.TrimSpace(line), "\t")
+		if fields[0] != "mod" {
+			continue
+		}
+		if len(fields) < 3 || fields[1] != xcaddyModule {
+			return "", fmt.Errorf("%s: %q is not mod %s <version>", recordXcaddy, strings.TrimSpace(line), xcaddyModule)
+		}
+		versions = append(versions, fields[2])
+	}
+	switch {
+	case len(versions) != 1:
+		return "", fmt.Errorf("%s: %d mod lines, not the one that names %s", recordXcaddy, len(versions), xcaddyModule)
+	// What Go records for a build from a checkout: it names no commit.
+	case versions[0] == "(devel)":
+		return "", fmt.Errorf("%s: %s is (devel), which names no commit", recordXcaddy, xcaddyModule)
+	}
+	return versions[0], nil
 }
 
 func parseExtensions(data []byte) ([]string, error) {
@@ -284,6 +326,7 @@ func Diff(a, b Manifest) []string {
 		{"php", a.PHP, b.PHP},
 		{"caddy", a.Caddy, b.Caddy},
 		{"go", a.Go, b.Go},
+		{"xcaddy", a.Xcaddy, b.Xcaddy},
 	} {
 		if f.a != f.b {
 			lines = append(lines, f.name+": "+f.a+" → "+f.b)

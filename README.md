@@ -76,7 +76,8 @@ and that is how library fixes arrive.
 ## The manifest
 
 `build/records.sh` writes into the carrier what the binary reports about
-itself and what spc recorded: `app.txt`, `version.txt`, `build-info.txt`,
+itself, what Go reports about the xcaddy that built it and what spc
+recorded: `app.txt`, `version.txt`, `build-info.txt`, `xcaddy.txt`,
 `extensions.txt`, `spc-cache.json` and `build-manifest.json`.
 `cmd/frankenphp-manifest` reads them, from the carrier's layers, into a
 manifest:
@@ -87,13 +88,14 @@ frankenphp-manifest -oci carrier.tar -arch arm64 -app librespeed
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,
   "app": "librespeed",
   "arch": "arm64",
   "frankenphp": "v1.13.5",
   "php": "8.5.12",
   "caddy": "v2.11.9",
   "go": "go1.27.4",
+  "xcaddy": "v0.4.7",
   "extensions": ["Core", "PDO", "Phar", "…"],
   "libraries": {
     "libaom": "dev-main+8a10385@8a1038536cde81c548341145f40d6dfddc3077d6",
@@ -104,13 +106,19 @@ frankenphp-manifest -oci carrier.tar -arch arm64 -app librespeed
 }
 ```
 
+`xcaddy` is the version Go recorded for the xcaddy that built the binary.
+spc installs it from its master branch when it fetches a newer Go than the
+builder image holds, and otherwise uses the one the builder image
+installed. Either way it reads as a release when that commit is one, as
+here, or else as a pseudo-version that names the commit.
+
 Each library is the version spc resolved, or the file it fetched when it
 names none, then the hash of that source: a SHA-1 for an archive, the
 commit for a git checkout. The manifest leaves out everything that differs
 between two builds of the same inputs, such as the time spc fetched each
-source, so two such builds give equal manifests even though their carriers'
-digests differ. `frankenphp-manifest -compare A.json B.json` says what moved
-between two.
+source, so two such builds give equal manifests even though their
+carriers' digests differ. `frankenphp-manifest -compare A.json B.json`
+says what moved between two.
 
 The same command refuses a carrier whose binary carries a file capability,
 or whose records are for another app or architecture.
