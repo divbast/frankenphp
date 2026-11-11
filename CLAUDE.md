@@ -103,7 +103,12 @@ this project's one record of LLM involvement.
   nothing else, and `cmd/frankenphp-manifest/workflow_test.go` holds it
   to that
 - `just build-app <app>` builds one app's carrier as
-  `localhost/frankenphp:<app>`
+  `localhost/frankenphp:<app>`. Every build script spc runs can read
+  `GITHUB_TOKEN`, so it takes only a fine-grained token (`github_pat_`)
+  that reads only public repositories, as README.md's "A token for local
+  builds" says, or CI's job token (`ghs_`). It refuses any other kind, gh's
+  `gho_` included, and never falls back on gh's token. The prefix shows the
+  kind, not the scope
 - `just ci` runs every gate. Run it before committing; `just lint` is
   enough for a commit that changes only documentation
 - `go run ./cmd/frankenphp-manifest -oci <archive> -arch <arch>` prints a

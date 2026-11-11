@@ -79,8 +79,14 @@ RUN : "${APP:?is empty: pass apps/<app>.env as build arguments, as just build-ap
 # spc asks the GitHub API which release of each library to fetch, and a call
 # refused at the unauthenticated rate limit fails the build. The token comes
 # as a secret, which no layer, history entry or cache key ever holds, as they
-# would an ARG or ENV. Without the secret GITHUB_TOKEN is empty, and spc then
-# sends no token at all.
+# would an ARG or ENV. It is in the environment of this whole RUN, though,
+# and spc passes its environment to everything it starts, so every library's
+# build scripts, the xcaddy install and the Go build can read it. CI passes
+# its job's read-only token; a local build takes a fine-grained token with
+# Public repositories (read-only) access; see README.md, "A token for local
+# builds".
+# Without the secret GITHUB_TOKEN is empty, and spc then sends no token at
+# all.
 RUN --mount=type=secret,id=github_token,env=GITHUB_TOKEN \
     PHP_EXTENSIONS="${PHP_EXTENSIONS}" \
     PHP_EXTENSION_LIBS="${PHP_EXTENSION_LIBS}" \

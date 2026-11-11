@@ -135,13 +135,45 @@ binary takes libaom from its main branch, so its tag moves most days.
 ## Working here
 
 ```sh
-just setup              # divbast/ci at the pinned commit, and the toolchain
-just build-app baikal   # localhost/frankenphp:baikal
-just ci                 # every gate; run it before committing
+just setup                            # divbast/ci at the pinned commit, and the toolchain
+GITHUB_TOKEN=… just build-app baikal  # localhost/frankenphp:baikal; the token is below
+just ci                               # every gate; run it before committing
 ```
 
-`just build-app` sends gh's token to spc as a build secret, so spc's
-GitHub API calls escape the unauthenticated rate limit.
+### A token for local builds
+
+`just build-app` needs a GitHub token in `GITHUB_TOKEN`, and refuses to
+build without one. The token is there only to lift the rate limit on spc's
+calls to the GitHub API, which fail the build once the unauthenticated
+limit runs out. It reaches the build as a secret, so no layer holds it, but
+every build script spc runs can read it: each library's configure and make,
+libaom's from its main branch among them, the xcaddy install and the Go
+build.
+
+So use a fine-grained personal access token with **Repository access:
+Public repositories (read-only)** and no account or repository permissions
+beyond the default metadata read. It reads only what anyone can read
+anonymously, so a leak costs at most your API rate limit, and an expiry of
+up to a year is reasonable: GitHub allows up to 366 days, or none, emails
+before the token expires, and "Regenerate token" keeps its settings.
+
+Keep it in a password manager or the OS keychain and pass it for one
+command:
+
+```sh
+GITHUB_TOKEN="$(<your password manager's get command>)" just build-app librespeed
+```
+
+Don't export it from a shell profile or a `mise.toml` `[env]`: gh prefers
+`GITHUB_TOKEN` over its own stored login (`gh help environment`), so your
+own gh commands would start using the read-only token.
+
+`just build-app` takes a token only when it starts with `github_pat_`, a
+fine-grained personal access token, or `ghs_`, the job token Actions
+issues, and refuses any other kind, gh's own `gho_` among them, naming the
+kind it saw without printing the token. The prefix shows the kind, not the
+token's access. CI's build job passes its own read-only `ghs_` token to the
+build directly, not through `just build-app`.
 
 ## Licence
 
