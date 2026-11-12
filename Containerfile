@@ -9,7 +9,10 @@
 ARG BUILDER_IMAGE=dunglas/frankenphp:static-builder-gnu@sha256:4dcdd53971ba1f373c3eb90e393dd3944687938c5c03494ab684921594905fc7
 # The binary's own roots. Unset, build-static.sh takes the newest PHP 8.5 from
 # php.net and xcaddy the newest Caddy and plugins, so two builds of one commit
-# ship different binaries. build/pinned-versions.sh checks the binary agrees.
+# could ship a different PHP or Caddy. build/pinned-versions.sh checks the
+# binary agrees. Not every input is pinned: spc still chooses the Go
+# toolchain, xcaddy and most C libraries as it runs, and records.sh writes
+# down which.
 ARG PHP_VERSION=8.5.12
 ARG CADDY_VERSION=v2.11.9
 ARG CBROTLI_VERSION=v1.0.1
@@ -79,8 +82,14 @@ RUN : "${APP:?is empty: pass apps/<app>.env as build arguments, as just build-ap
 # spc asks the GitHub API which release of each library to fetch, and a call
 # refused at the unauthenticated rate limit fails the build. The token comes
 # as a secret, which no layer, history entry or cache key ever holds, as they
-# would an ARG or ENV. Without the secret GITHUB_TOKEN is empty, and spc then
-# sends no token at all.
+# would an ARG or ENV. It is in the environment of this whole RUN, though,
+# and spc passes its environment to everything it starts, so every library's
+# build scripts, the xcaddy install and the Go build can read it. CI passes
+# its job's read-only token; a local build takes a fine-grained token with
+# Public repositories (read-only) access; see README.md, "A token for local
+# builds".
+# Without the secret GITHUB_TOKEN is empty, and spc then sends no token at
+# all.
 RUN --mount=type=secret,id=github_token,env=GITHUB_TOKEN \
     PHP_EXTENSIONS="${PHP_EXTENSIONS}" \
     PHP_EXTENSION_LIBS="${PHP_EXTENSION_LIBS}" \
@@ -105,9 +114,13 @@ RUN FRANKENPHP_BIN=/go/src/app/dist/frankenphp /tmp/extensions.sh
 FROM build AS records
 ARG APP
 COPY --chmod=0755 build/records.sh /tmp/records.sh
+# go-xcaddy is spc's package of the Go toolchain and the xcaddy that built
+# the binary, under the builder's PKG_ROOT_PATH.
 RUN FRANKENPHP_BIN=/go/src/app/dist/frankenphp \
     SPC_CACHE=/go/src/app/dist/downloads/.cache.json \
     BUILD_MANIFEST=/go/src/app/dist/buildroot/build-manifest.json \
+    GO_BIN=/opt/spc-pkgroot/go-xcaddy/bin/go \
+    XCADDY_BIN=/opt/spc-pkgroot/go-xcaddy/bin/xcaddy \
     RECORDS=/records \
     /tmp/records.sh
 

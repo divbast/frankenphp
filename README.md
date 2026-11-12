@@ -5,7 +5,11 @@
 
 The [FrankenPHP](https://github.com/php/frankenphp) binaries divbast's
 images run: PHP 8.5 and Caddy in one binary, built once per app with that
-app's PHP extensions, from pinned sources, and attested.
+app's PHP extensions, and attested. The builder image, FrankenPHP, PHP,
+Caddy and its plugins, and static-php-cli are pinned; the Go toolchain,
+xcaddy and most of the C libraries are chosen while the build runs, and
+each carrier records what was chosen, as
+[What goes into a binary](#what-goes-into-a-binary) says.
 
 Published as `ghcr.io/divbast/frankenphp`.
 
@@ -55,7 +59,8 @@ to verify what an app's Containerfile pins.
 
 Every app's binary is built by one `Containerfile` from the same pins:
 
-- the `dunglas/frankenphp:static-builder-gnu` image, by digest;
+- the `dunglas/frankenphp:static-builder-gnu` image, by digest, which also
+  holds the FrankenPHP source the binary is built from;
 - PHP, Caddy and Caddy's three plugins, by version;
 - static-php-cli (spc), which builds PHP and its C libraries, by commit.
 
@@ -68,15 +73,29 @@ which `build/extensions.sh` checks. `cmd/frankenphp-buildargs` reads the file
 and refuses anything else in it; `just build-app` and the build workflow
 both build through it.
 
-spc still chooses some sources while the build runs: openssl, zlib and
-several other C libraries come from their newest release, and libaom from
-its main branch. So a rebuild of an unchanged commit can hold newer C code,
-and that is how library fixes arrive.
+The pins do not fix every input. spc chooses these while the build runs:
+
+- the Go toolchain: the newest release go.dev lists;
+- xcaddy, which writes the binary's main module and runs its build: the
+  head of its `master` branch when spc fetches a newer Go than the builder
+  image holds, and otherwise the xcaddy the builder image installed;
+- libaom: the head of its main branch;
+- brotli, freetype, libavif, libjpeg, libpng, libwebp, libxml2, onig,
+  openssl, watcher, xz and zlib: the newest GitHub release or tag that
+  matches spc's rule for each;
+- libiconv: the newest in GNU's file listing.
+
+Of the libraries the two apps build, only sqlite and bzip2 come from fixed
+URLs in spc's config instead. A rebuild of an unchanged commit can
+therefore hold newer code, which is how fixes to the others arrive. The
+manifest below records each of these inputs, so the daily rebuild
+publishes when one moves.
 
 ## The manifest
 
 `build/records.sh` writes into the carrier what the binary reports about
-itself and what spc recorded: `app.txt`, `version.txt`, `build-info.txt`,
+itself, what Go reports about the xcaddy that built it and what spc
+recorded: `app.txt`, `version.txt`, `build-info.txt`, `xcaddy.txt`,
 `extensions.txt`, `spc-cache.json` and `build-manifest.json`.
 `cmd/frankenphp-manifest` reads them, from the carrier's layers, into a
 manifest:
@@ -87,13 +106,14 @@ frankenphp-manifest -oci carrier.tar -arch arm64 -app librespeed
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,
   "app": "librespeed",
   "arch": "arm64",
   "frankenphp": "v1.13.5",
   "php": "8.5.12",
   "caddy": "v2.11.9",
   "go": "go1.27.4",
+  "xcaddy": "v0.4.7",
   "extensions": ["Core", "PDO", "Phar", "…"],
   "libraries": {
     "libaom": "dev-main+8a10385@8a1038536cde81c548341145f40d6dfddc3077d6",
@@ -104,13 +124,19 @@ frankenphp-manifest -oci carrier.tar -arch arm64 -app librespeed
 }
 ```
 
+`xcaddy` is the version Go recorded for the xcaddy that built the binary.
+spc installs it from its master branch when it fetches a newer Go than the
+builder image holds, and otherwise uses the one the builder image
+installed. Either way it reads as a release when that commit is one, as
+here, or else as a pseudo-version that names the commit.
+
 Each library is the version spc resolved, or the file it fetched when it
 names none, then the hash of that source: a SHA-1 for an archive, the
 commit for a git checkout. The manifest leaves out everything that differs
 between two builds of the same inputs, such as the time spc fetched each
-source, so two such builds give equal manifests even though their carriers'
-digests differ. `frankenphp-manifest -compare A.json B.json` says what moved
-between two.
+source, so two such builds give equal manifests even though their
+carriers' digests differ. `frankenphp-manifest -compare A.json B.json`
+says what moved between two.
 
 The same command refuses a carrier whose binary carries a file capability,
 or whose records are for another app or architecture.
@@ -135,13 +161,45 @@ binary takes libaom from its main branch, so its tag moves most days.
 ## Working here
 
 ```sh
-just setup              # divbast/ci at the pinned commit, and the toolchain
-just build-app baikal   # localhost/frankenphp:baikal
-just ci                 # every gate; run it before committing
+just setup                            # divbast/ci at the pinned commit, and the toolchain
+GITHUB_TOKEN=… just build-app baikal  # localhost/frankenphp:baikal; the token is below
+just ci                               # every gate; run it before committing
 ```
 
-`just build-app` sends gh's token to spc as a build secret, so spc's
-GitHub API calls escape the unauthenticated rate limit.
+### A token for local builds
+
+`just build-app` needs a GitHub token in `GITHUB_TOKEN`, and refuses to
+build without one. The token is there only to lift the rate limit on spc's
+calls to the GitHub API, which fail the build once the unauthenticated
+limit runs out. It reaches the build as a secret, so no layer holds it, but
+every build script spc runs can read it: each library's configure and make,
+libaom's from its main branch among them, the xcaddy install and the Go
+build.
+
+So use a fine-grained personal access token with **Repository access:
+Public repositories (read-only)** and no account or repository permissions
+beyond the default metadata read. It reads only what anyone can read
+anonymously, so a leak costs at most your API rate limit, and an expiry of
+up to a year is reasonable: GitHub allows up to 366 days, or none, emails
+before the token expires, and "Regenerate token" keeps its settings.
+
+Keep it in a password manager or the OS keychain and pass it for one
+command:
+
+```sh
+GITHUB_TOKEN="$(<your password manager's get command>)" just build-app librespeed
+```
+
+Don't export it from a shell profile or a `mise.toml` `[env]`: gh prefers
+`GITHUB_TOKEN` over its own stored login (`gh help environment`), so your
+own gh commands would start using the read-only token.
+
+`just build-app` takes a token only when it starts with `github_pat_`, a
+fine-grained personal access token, or `ghs_`, the job token Actions
+issues, and refuses any other kind, gh's own `gho_` among them, naming the
+kind it saw without printing the token. The prefix shows the kind, not the
+token's access. CI's build job passes its own read-only `ghs_` token to the
+build directly, not through `just build-app`.
 
 ## Licence
 

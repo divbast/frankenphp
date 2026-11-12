@@ -20,7 +20,10 @@ import (
 )
 
 // The records in testdata/ are those of two local arm64 builds of the
-// carriers, one per app, as records.sh wrote them.
+// carriers, one per app, as records.sh wrote them. xcaddy.txt, which
+// records.sh did not write then, is `go version -m` of the xcaddy in each
+// app's build stage from a later local build of the same sources, as
+// records.sh writes it now.
 
 var libreSpeedLibraries = map[string]string{
 	"brotli":   "v1.2.1@59725b2fe394af2e8b5d654ef1d432d9714f6689",
@@ -169,11 +172,11 @@ func TestFromRecords(t *testing.T) {
 
 			scalars := manifest.Manifest{
 				Schema: got.Schema, App: got.App, Arch: got.Arch,
-				FrankenPHP: got.FrankenPHP, PHP: got.PHP, Caddy: got.Caddy, Go: got.Go,
+				FrankenPHP: got.FrankenPHP, PHP: got.PHP, Caddy: got.Caddy, Go: got.Go, Xcaddy: got.Xcaddy,
 			}
 			want := manifest.Manifest{
-				Schema: 1, App: tt.app, Arch: "arm64",
-				FrankenPHP: "v1.13.5", PHP: "8.5.12", Caddy: "v2.11.9", Go: "go1.27.4",
+				Schema: 2, App: tt.app, Arch: "arm64",
+				FrankenPHP: "v1.13.5", PHP: "8.5.12", Caddy: "v2.11.9", Go: "go1.27.4", Xcaddy: "v0.4.7",
 			}
 			if !reflect.DeepEqual(scalars, want) {
 				t.Errorf("FromRecords() = %+v, want %+v", scalars, want)
@@ -239,6 +242,8 @@ func TestFromRecordsRefuses(t *testing.T) {
 		{name: "no-extensions", files: without(ls, "extensions.txt"), want: "extensions.txt", wantIs: fs.ErrNotExist},
 		{name: "no-spc-cache", files: without(ls, "spc-cache.json"), want: "spc-cache.json", wantIs: fs.ErrNotExist},
 		{name: "no-build-manifest", files: without(ls, "build-manifest.json"), want: "build-manifest.json", wantIs: fs.ErrNotExist},
+		// As every carrier holds that was built before xcaddy was recorded
+		{name: "no-xcaddy", files: without(ls, "xcaddy.txt"), want: "xcaddy.txt", wantIs: fs.ErrNotExist},
 		{name: "empty-app", files: edited(t, ls, "app.txt", "librespeed", ""), want: "app.txt"},
 		{name: "two-word-app", files: edited(t, ls, "app.txt", "librespeed", "libre speed"), want: "app.txt"},
 		{name: "version-garbled", files: edited(t, ls, "version.txt", "PHP 8.5.12", "PHP"), want: "version.txt"},
@@ -248,7 +253,13 @@ func TestFromRecordsRefuses(t *testing.T) {
 		{name: "no-extensions-listed", files: map[string][]byte{
 			"app.txt": ls["app.txt"], "version.txt": ls["version.txt"], "build-info.txt": ls["build-info.txt"],
 			"extensions.txt": []byte("\n"), "spc-cache.json": ls["spc-cache.json"], "build-manifest.json": ls["build-manifest.json"],
+			"xcaddy.txt": ls["xcaddy.txt"],
 		}, want: "extensions.txt"},
+		// What records.sh would write if XCADDY_BIN named another Go binary
+		{name: "xcaddy-another-module", files: edited(t, ls, "xcaddy.txt", "mod\tgithub.com/caddyserver/xcaddy\t", "mod\tcaddy\t"), want: "xcaddy.txt"},
+		{name: "xcaddy-no-module", files: edited(t, ls, "xcaddy.txt", "\tmod\tgithub.com/caddyserver/xcaddy\tv0.4.7\th1:WHNm6tqCFXcOxBovXqMzOvNa0W4arbQRxCeNap2S+aU=\n", ""), want: "xcaddy.txt"},
+		// A build from a local checkout, whose version names no commit
+		{name: "xcaddy-devel", files: edited(t, ls, "xcaddy.txt", "xcaddy\tv0.4.7\t", "xcaddy\t(devel)\t"), want: "(devel)"},
 		{name: "spc-cache-garbled", files: edited(t, ls, "spc-cache.json", `"libwebp": {`, `"libwebp": [`), want: "spc-cache.json"},
 		{name: "build-manifest-schema", files: edited(t, ls, "build-manifest.json", `"schema-version": 1`, `"schema-version": 2`), want: "schema-version"},
 		{name: "library-uncached", files: edited(t, ls, "spc-cache.json", `"libaom": {`, `"libaom-gone": {`), want: "libaom"},
@@ -416,6 +427,8 @@ func TestFromOCIArchiveRefuses(t *testing.T) {
 const (
 	aomOld = "dev-main+8a10385@8a1038536cde81c548341145f40d6dfddc3077d6"
 	aomNew = "dev-main+81c2f0e@81c2f0e4b0c0d3a5a1e7f9b2c6d8e0a1b3c5d7f9"
+	// What Go would name xcaddy's master branch a commit past v0.4.7.
+	xcaddyNew = "v0.4.8-0.20261112093000-0123456789ab"
 )
 
 func TestDiff(t *testing.T) {
@@ -448,6 +461,11 @@ func TestDiff(t *testing.T) {
 			want: []string{"extension gd: removed"},
 		},
 		{
+			name: "xcaddy-moved",
+			edit: func(m *manifest.Manifest) { m.Xcaddy = xcaddyNew },
+			want: []string{"xcaddy: v0.4.7 → " + xcaddyNew},
+		},
+		{
 			name: "go-module-bumped",
 			edit: func(m *manifest.Manifest) { m.GoModules["github.com/caddyserver/caddy/v2"] = "v2.11.10" },
 			want: []string{"go module github.com/caddyserver/caddy/v2: v2.11.9 → v2.11.10"},
@@ -468,12 +486,14 @@ func TestDiff(t *testing.T) {
 				m.GoModules["golang.org/x/net"] = "v9.9.9"
 				m.Libraries["libaom"] = aomNew
 				m.Go = "go1.27.5"
+				m.Xcaddy = xcaddyNew
 				m.PHP = "8.5.13"
 				m.Extensions = slices.DeleteFunc(m.Extensions, func(e string) bool { return e == "Phar" })
 			},
 			want: []string{
 				"php: 8.5.12 → 8.5.13",
 				"go: go1.27.4 → go1.27.5",
+				"xcaddy: v0.4.7 → " + xcaddyNew,
 				"extension Phar: removed",
 				"library libaom: " + aomOld + " → " + aomNew,
 				"go module golang.org/x/net: " + base.GoModules["golang.org/x/net"] + " → v9.9.9",

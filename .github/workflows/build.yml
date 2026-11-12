@@ -21,12 +21,13 @@ on:
   push:
     branches: [main]
   schedule:
-    # The daily rebuild, from scratch. spc resolves several C libraries to
-    # their newest release, and libaom to its branch's head, while the build
-    # runs, so a rebuild of an unchanged main can hold different code. When
-    # main is still the published commit, it publishes only when the version
-    # manifest of either architecture moved; when main has moved past it, as
-    # after a merge whose own publish failed, it publishes main.
+    # The daily rebuild, from scratch. spc resolves the Go toolchain and most
+    # C libraries to their newest release, libaom to its branch's head, and,
+    # with a newer Go than the builder's, xcaddy to its branch's head, while
+    # the build runs, so a rebuild of an unchanged main can hold different
+    # code. When main is still the published commit, it publishes only when
+    # the version manifest of either architecture moved; when main has moved
+    # past it, as after a merge whose own publish failed, it publishes main.
     # 12:13 UTC, early enough that a start GitHub gives hours late still
     # lands before the apps' own daily slots, which take the new binary.
     - cron: '13 12 * * *'
@@ -216,6 +217,9 @@ jobs:
     env:
       IMAGE: ghcr.io/divbast/frankenphp
       APP: ${{ matrix.app }}
+      # Every recipe runs through `mise exec`, which would otherwise first
+      # install each tool in mise.toml that mise-action below leaves out.
+      MISE_AUTO_INSTALL: "false"
     steps:
       # Full history, so the decision below can tell a newer commit from an
       # older one
@@ -223,8 +227,16 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      # Of mise.toml's tools this job runs only just and Go, which builds
+      # ci's tools and runs frankenphp-manifest; git, gh, skopeo, jq,
+      # sha256sum and docker come with the runner. No linter belongs beside
+      # these write scopes, so neither does `just setup`.
+      # cmd/frankenphp-manifest/workflow_test.go holds the job to this.
       - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
-      - run: just setup
+        with:
+          install_args: core:go aqua:casey/just
+      # divbast/ci at the commit the workflows pin, and its tools in .ci/bin
+      - run: just ci-checkout
       - run: just ci-tools
       # For `imagetools create`
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
