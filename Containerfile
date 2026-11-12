@@ -22,7 +22,7 @@ ARG VULCAIN_VERSION=v1.4.6
 # unchecked nightly binary on every build. Its v3 branch has no tags, so
 # Renovate follows the branch head by commit. build/pinned-spc.sh checks it
 # ran.
-ARG SPC_COMMIT=ff04d4af9ba44f6c194239d733e0529cc6ddecea
+ARG SPC_COMMIT=3ba9ffa0593b94202b48d6dde51e489191ecdbf1
 
 FROM ${BUILDER_IMAGE} AS build
 ARG SPC_COMMIT
