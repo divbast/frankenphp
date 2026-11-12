@@ -73,16 +73,17 @@ build-app APP:
         --secret id=github_token,env=GITHUB_TOKEN "${args[@]}" \
         -t "localhost/frankenphp:"{{ quote(APP) }} -f Containerfile .
 
-# Every lint gate
+# Every lint gate and the Go tests: CI runs this recipe, so the tests gate
+# every pull request
 lint:
-    {{ just_executable() }} actions-check workflow-audit actionlint shell-lint go-lint reuse-lint
+    {{ just_executable() }} actions-check workflow-audit actionlint shell-lint go-lint go-test reuse-lint
     hadolint Containerfile
     # BuildKit's own checks. --check is a buildx flag, so this needs Docker
     docker build --check -f Containerfile .
 
-# Every test
+# The Go tests alone
 test:
     {{ just_executable() }} go-test
 
 # Every gate. Run before committing
-ci: lint test
+ci: lint
