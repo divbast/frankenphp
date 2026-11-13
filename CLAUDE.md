@@ -197,10 +197,10 @@ this project's one record of LLM involvement.
   every command. `TestPublishShellIsBashWithPipefail` holds the job's
   effective shell to `bash`, `--noprofile --norc -eo pipefail`, which the
   behaviour tests run the steps under; left unset, Actions runs
-  `bash -e` without pipefail. A step written in any YAML form but the plain one the extractor
-  reads, such as `run: |-`, a flow mapping or a `shell:` key, fails the
-  test rather than going unread. A change shows as a diff: read it, and
-  only if it is meant run
+  `bash -e` without pipefail. A step written in any YAML form but the
+  plain one the extractor reads, such as `run: |-`, a flow mapping or a
+  `shell:` key, fails the test rather than going unread. A change shows as
+  a diff: read it, and only if it is meant run
   `go test ./cmd/frankenphp-manifest/ -run '^TestPublishShellPinned$' -update`
   and commit the file with it. `publish_test.go` also runs the verify and
   dry-run steps' own scripts under bash against the stubs in
@@ -219,11 +219,9 @@ this project's one record of LLM involvement.
   `BASH_ENV` or a `PATH` would change what the pinned scripts run. `go` and
   `just` run as `mise exec -- go` and `mise exec -- just`, which gives that
   one command the toolchain and the `[env]`. The job's `uses:` steps are
-  exactly the actions `TestPublishUsesOnlyItsActions` lists, in order, each
-  pinned to a full SHA with its version as a comment, though not to a
-  particular SHA, so Renovate's bumps pass: an action the job gains is a
-  change to review there. Both are divbast/ci's rules for its own publish
-  job, held here by `TestPublishMiseIsolated` and that test
+  exactly the actions the test lists, in order, each pinned to a full SHA
+  with its version as a comment: an action it gains is a change to review
+  in that test. This is divbast/ci's rule for its own publish job
 
 ## Key commands
 
