@@ -12,7 +12,9 @@
 # downloads. Its cache records a git clone's version as
 # "dev-<ref>+<short commit>", so only a clone of the tag reads
 # "dev-${LIBAOM_TAG}+". An app without gd, such as Baikal, has no libaom,
-# and passes.
+# and passes, but only on a cache the craft wrote: the Containerfile's
+# go-xcaddy step writes one first, holding go-xcaddy alone, and no libaom in
+# that proves nothing. Every craft fetches php-src; install-pkg never does.
 set -euo pipefail
 
 CACHE="${SPC_CACHE:-dist/downloads/.cache.json}"
@@ -39,12 +41,20 @@ if ! names=$(jq -r 'if type == "object" then keys[] else error("not one JSON obj
 	fail "${CACHE} is not spc's download cache, or jq cannot read it."
 	exit 1
 fi
+if ! grep -qxF php-src <<<"${names}"; then
+	fail "${CACHE} has no php-src, which every spc craft fetches: the craft did not write this cache, so it shows nothing about libaom."
+	exit 1
+fi
 if ! grep -qxF libaom <<<"${names}"; then
 	echo "no libaom in this build, so LIBAOM_TAG=${LIBAOM_TAG} pins nothing here"
 	exit 0
 fi
 
-version=$(jq -r '.libaom.source.version // empty' "${CACHE}")
+# jq says above the ERROR line what it could not read.
+if ! version=$(jq -r '.libaom.source.version // empty' "${CACHE}"); then
+	fail "spc's entry for libaom in ${CACHE} is not the shape spc writes, an object with a source."
+	exit 1
+fi
 if [[ -z "${version}" ]]; then
 	fail "spc recorded no version for libaom's source in ${CACHE}."
 elif [[ "${version}" != "dev-${LIBAOM_TAG}+"* ]]; then

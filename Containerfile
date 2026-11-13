@@ -74,8 +74,11 @@ ARG XCADDY_VERSION
 # download (its .spc-hash matches) and leaves it alone. spc's master build
 # here must still compile, though nothing runs it. env -C runs spc from
 # dist/, where build-static.sh runs it, without a WORKDIR (see above).
-# Neither step calls the GitHub API, so neither sees the token.
+# PKG_ROOT_PATH is the builder image's, which spc reads too, so every path
+# to the package below follows it. Neither step calls the GitHub API, so
+# neither sees the token.
 RUN set -eux; \
+    : "${PKG_ROOT_PATH:?is unset: spc unpacks go-xcaddy under it, and the builder image sets it}"; \
     retry() { \
         for delay in 10 30 90; do "$@" && return 0; sleep "${delay}"; done; \
         "$@"; \
@@ -83,10 +86,10 @@ RUN set -eux; \
     retry env -C /go/src/app/dist \
         /go/src/app/dist/spc install-pkg go-xcaddy --dl-retry=5; \
     retry env CGO_ENABLED=0 GOTOOLCHAIN=local \
-        GOROOT=/opt/spc-pkgroot/go-xcaddy \
-        GOBIN=/opt/spc-pkgroot/go-xcaddy/bin \
-        GOPATH=/opt/spc-pkgroot/go-xcaddy/go \
-        /opt/spc-pkgroot/go-xcaddy/bin/go install \
+        GOROOT="${PKG_ROOT_PATH}/go-xcaddy" \
+        GOBIN="${PKG_ROOT_PATH}/go-xcaddy/bin" \
+        GOPATH="${PKG_ROOT_PATH}/go-xcaddy/go" \
+        "${PKG_ROOT_PATH}/go-xcaddy/bin/go" install \
         "github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}"
 ARG LIBAOM_TAG
 # spc reads download-options from craft.yml, and build-static.sh copies
@@ -149,8 +152,8 @@ RUN cp "$(ls /go/src/app/dist/frankenphp-linux-*)" /go/src/app/dist/frankenphp
 # rebuilds the binary.
 COPY --chmod=0755 build/pinned-versions.sh /tmp/pinned-versions.sh
 RUN FRANKENPHP_BIN=/go/src/app/dist/frankenphp \
-    GO_BIN=/opt/spc-pkgroot/go-xcaddy/bin/go \
-    XCADDY_BIN=/opt/spc-pkgroot/go-xcaddy/bin/xcaddy \
+    GO_BIN="${PKG_ROOT_PATH}/go-xcaddy/bin/go" \
+    XCADDY_BIN="${PKG_ROOT_PATH}/go-xcaddy/bin/xcaddy" \
     /tmp/pinned-versions.sh
 COPY --chmod=0755 build/pinned-libaom.sh /tmp/pinned-libaom.sh
 RUN SPC_CACHE=/go/src/app/dist/downloads/.cache.json /tmp/pinned-libaom.sh
@@ -171,8 +174,8 @@ COPY --chmod=0755 build/records.sh /tmp/records.sh
 RUN FRANKENPHP_BIN=/go/src/app/dist/frankenphp \
     SPC_CACHE=/go/src/app/dist/downloads/.cache.json \
     BUILD_MANIFEST=/go/src/app/dist/buildroot/build-manifest.json \
-    GO_BIN=/opt/spc-pkgroot/go-xcaddy/bin/go \
-    XCADDY_BIN=/opt/spc-pkgroot/go-xcaddy/bin/xcaddy \
+    GO_BIN="${PKG_ROOT_PATH}/go-xcaddy/bin/go" \
+    XCADDY_BIN="${PKG_ROOT_PATH}/go-xcaddy/bin/xcaddy" \
     RECORDS=/records \
     /tmp/records.sh
 

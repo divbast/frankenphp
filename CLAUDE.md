@@ -68,7 +68,10 @@ this project's one record of LLM involvement.
   reaches spc as a `custom-git` line added to `craft.yml`, which spc
   ignores without a word if the name in it is not a package it downloads.
   `custom-git` takes a tag or a branch, never a commit, since spc clones it
-  with `git clone --branch`
+  with `git clone --branch`. The go-xcaddy step writes spc's download cache
+  before the craft runs, holding go-xcaddy alone, so a check that reads the
+  cache first proves the craft wrote it: every craft fetches `php-src`, and
+  `install-pkg` never does
 - **An app's file never holds a pin.** `apps/<app>.env` sets exactly
   `PHP_EXTENSIONS`, `PHP_EXTENSION_LIBS`, `EXPECTED_EXTENSIONS` and
   `REQUIRED_GD_FEATURES`; `internal/appenv` refuses anything else, and
