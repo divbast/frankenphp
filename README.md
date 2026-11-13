@@ -20,6 +20,7 @@ Published as `ghcr.io/divbast/frankenphp`.
 | `:baikal` | Baikal's binary, for amd64 and arm64 |
 | `:librespeed` | LibreSpeed's binary, for amd64 and arm64 |
 | `:<app>-amd64`, `:<app>-arm64` | what each publish pushes first, to make the index above from. Not for use |
+| `:<app>-staging` | the index each publish attests and verifies before it moves `:<app>` to it. Not for use |
 
 Each tag is a carrier, not a runnable image: built `FROM scratch`, it holds
 the binary at `/frankenphp` and the records of how it was built under
@@ -178,6 +179,12 @@ never moves back to an older commit than the one it holds.
 Each app publishes on its own. A build that fails for one app stops only
 that app's publish, before it pushes anything, while the other app's goes
 ahead; the run still fails, as a pull request with that failure does.
+
+`:<app>` moves last. A publish pushes the new index as `:<app>-staging`,
+attests it, and verifies that attestation the way apps do, and only then
+points `:<app>` at the same digest. A publish that fails before that leaves
+`:<app>` on the index it already held, and re-running the failed job
+publishes.
 
 ## Working here
 

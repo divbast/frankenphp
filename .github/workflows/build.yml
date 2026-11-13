@@ -280,7 +280,9 @@ jobs:
       # merge's run, racing the daily run on the same commit, or a re-run
       # with its old carriers, would otherwise publish libraries its build
       # fetched earlier over what the daily run had just published. Nothing
-      # moves the tag back to an older commit either.
+      # moves the tag back to an older commit either. It reads only
+      # :<app>, never the staging tag below, so an index staged but never
+      # promoted does not count as published.
       # cmd/frankenphp-manifest/workflow_test.go holds the condition below.
       # GH_TOKEN tells a private package from an absent one.
       - name: Decide whether to publish
@@ -314,6 +316,12 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ github.token }}
 
+      # From here to the verification, every step leaves :<app> where it
+      # was, so apps never see a digest with no attestation, and a re-run
+      # of this job decides against that tag and publishes again. The last
+      # step says so on a failure.
+      # cmd/frankenphp-manifest/workflow_test.go holds the order.
+
       # Each to its own tag, which only feeds the index below
       - name: Push both architectures
         if: steps.decide.outputs.publish == 'true'
@@ -326,11 +334,12 @@ jobs:
               "docker://${IMAGE}:${APP}-${arch}"
           done
 
-      # The description is what GHCR shows on the package page; the version
-      # is FrankenPHP's.
-      - name: Merge the architectures into one index
+      # The index, tagged only :<app>-staging, which no app reads. The
+      # description is what GHCR shows on the package page; the version is
+      # FrankenPHP's.
+      - name: Stage the index
         if: steps.decide.outputs.publish == 'true'
-        id: merge
+        id: stage
         run: |
           version=$(jq -er .frankenphp /tmp/carriers/amd64/manifest.json)
           created=$(date -u -d "@$(git log -1 --pretty=%ct)" +%Y-%m-%dT%H:%M:%SZ)
@@ -340,7 +349,7 @@ jobs:
             --annotation "index:org.opencontainers.image.revision=${GITHUB_SHA}" \
             --annotation "index:org.opencontainers.image.created=${created}" \
             --annotation "index:org.opencontainers.image.description=The FrankenPHP binary for divbast's ${APP} image, and the records of how it was built" \
-            -t "${IMAGE}:${APP}" \
+            -t "${IMAGE}:${APP}-staging" \
             "${IMAGE}@$(cat /tmp/digest-amd64)" \
             "${IMAGE}@$(cat /tmp/digest-arm64)"
           digest=$(jq -er '."containerimage.descriptor".digest' /tmp/index.json)
@@ -352,17 +361,49 @@ jobs:
         if: steps.decide.outputs.publish == 'true'
         with:
           subject-name: ghcr.io/divbast/frankenphp
-          subject-digest: ${{ steps.merge.outputs.digest }}
+          subject-digest: ${{ steps.stage.outputs.digest }}
           push-to-registry: true
           create-storage-record: false
 
+      # What every app's CI runs before it builds on this digest, here
+      # before any app can see it. The index's bytes come by digest, as an
+      # anonymous client gets them, and must hash back to it; gh then
+      # verifies that file, and never reads a registry login.
+      - name: Verify the attestation as apps do
+        if: steps.decide.outputs.publish == 'true'
+        id: verify
+        env:
+          DIGEST: ${{ steps.stage.outputs.digest }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          skopeo inspect --raw --no-creds "docker://${IMAGE}@${DIGEST}" >/tmp/staged-index.json
+          fetched=$(sha256sum /tmp/staged-index.json)
+          if [ "sha256:${fetched%% *}" != "${DIGEST}" ]; then
+            echo "::error::${IMAGE}@${DIGEST} came back as bytes that hash to sha256:${fetched%% *}."
+            exit 1
+          fi
+          empty=$(mktemp -d)
+          DOCKER_CONFIG="${empty}" gh attestation verify /tmp/staged-index.json \
+            --repo divbast/frankenphp \
+            --signer-workflow divbast/frankenphp/.github/workflows/build.yml@refs/heads/main \
+            --source-ref refs/heads/main
+
+      # One source and no annotations, so buildx pushes the staged index's
+      # own bytes under :<app>, and the digest stays the one just verified.
+      - name: Move the tag to the verified index
+        if: steps.decide.outputs.publish == 'true'
+        id: promote
+        env:
+          DIGEST: ${{ steps.stage.outputs.digest }}
+        run: docker buildx imagetools create -t "${IMAGE}:${APP}" "${IMAGE}@${DIGEST}"
+
       # What apps pull, as they pull it. A private package, or a tag that is
-      # not the index just pushed, fails the run here rather than in every
+      # not the index just verified, fails the run here rather than in every
       # app's next build.
       - name: Check the tag is the pushed index to an anonymous client
         if: steps.decide.outputs.publish == 'true'
         env:
-          DIGEST: ${{ steps.merge.outputs.digest }}
+          DIGEST: ${{ steps.stage.outputs.digest }}
         run: |
           if ! pulled=$(skopeo inspect --raw --no-creds "docker://${IMAGE}:${APP}" | sha256sum) ||
             [ "sha256:${pulled%% *}" != "${DIGEST}" ]; then
@@ -370,3 +411,9 @@ jobs:
             exit 1
           fi
           echo "${IMAGE}:${APP} is ${DIGEST} to an anonymous client"
+
+      # A step before the move failed, so the move never ran.
+      - name: Say what the failure left
+        if: failure() && steps.decide.outputs.publish == 'true' && steps.promote.outcome == 'skipped'
+        run: |
+          echo "::error::No public tag moved: ${IMAGE}:${APP} still names the index it named before this run. Re-running the failed job publishes."

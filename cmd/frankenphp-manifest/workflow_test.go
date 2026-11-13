@@ -253,6 +253,159 @@ func TestPublishDownloadsBeforePush(t *testing.T) {
 	}
 }
 
+// The staged index's bytes as the publish job fetches them, and the
+// verification it runs on them before it moves :<app>: the one every
+// app's CI runs, divbast/ci's frankenphpref.Verify.
+const stagedIndex = "/tmp/staged-index.json"
+
+var verifyFlags = []string{
+	"--repo divbast/frankenphp",
+	"--signer-workflow divbast/frankenphp/.github/workflows/build.yml@refs/heads/main",
+	"--source-ref refs/heads/main",
+}
+
+// tagFlag matches an imagetools create -t or --tag, and the tag it names.
+var tagFlag = regexp.MustCompile(`(?:^|\s)(?:-t|--tag)(?:\s+|=)("[^"]*"|\S+)`)
+
+// TestPublishAttestsBeforePromote checks that the publish job moves
+// :<app> only once the index it moves it to is attested and that
+// attestation verifies, so a failure on the way leaves the tag where it
+// was and a re-run of the job publishes again:
+//
+//   - the job pushes each architecture, stages the index under
+//     :<app>-staging alone, attests the staged digest, verifies it as a
+//     file fetched by that digest and hashed back to it, moves :<app> to
+//     the digest from one source with no annotations, so the bytes and the
+//     digest stay the attested ones, and then checks the tag anonymously,
+//     in that order;
+//   - no other step names :<app> as a tag or as a destination;
+//   - a last step, run on a failure that came before the move, says no
+//     public tag moved and that re-running the failed job publishes.
+func TestPublishAttestsBeforePromote(t *testing.T) {
+	t.Parallel()
+	job := jobLines(readLines(t, ".github", "workflows", "build.yml"), "publish")
+	if job == nil {
+		t.Fatal("build.yml has no publish job")
+	}
+	steps := stepLines(job)
+	const fromStage = "DIGEST: ${{ steps.stage.outputs.digest }}"
+
+	order := []struct {
+		what string
+		find func([]string) bool
+		want []string
+	}{
+		{
+			"pushes each architecture",
+			func(s []string) bool {
+				return mentions(s, "skopeo copy") && mentions(s, `"docker://${IMAGE}:${APP}-${arch}"`)
+			},
+			nil,
+		},
+		{
+			"stages the index",
+			hasID("stage"),
+			[]string{
+				`-t "${IMAGE}:${APP}-staging"`,
+				`echo "digest=${digest}" >> "${GITHUB_OUTPUT}"`,
+			},
+		},
+		{
+			"attests the staged index",
+			func(s []string) bool { return mentions(s, "uses: actions/attest@") },
+			[]string{"subject-name: ghcr.io/divbast/frankenphp", "subject-digest: ${{ steps.stage.outputs.digest }}", "push-to-registry: true"},
+		},
+		{
+			"verifies the attestation",
+			hasID("verify"),
+			append([]string{
+				fromStage,
+				`skopeo inspect --raw --no-creds "docker://${IMAGE}@${DIGEST}" >` + stagedIndex,
+				`if [ "sha256:${fetched%% *}" != "${DIGEST}" ]; then`,
+				`DOCKER_CONFIG="${empty}" gh attestation verify ` + stagedIndex,
+			}, verifyFlags...),
+		},
+		{
+			"moves the tag",
+			hasID("promote"),
+			[]string{fromStage, `run: docker buildx imagetools create -t "${IMAGE}:${APP}" "${IMAGE}@${DIGEST}"`},
+		},
+		{
+			"checks the tag anonymously",
+			func(s []string) bool {
+				return mentions(s, `skopeo inspect --raw --no-creds "docker://${IMAGE}:${APP}"`)
+			},
+			[]string{fromStage},
+		},
+		{
+			"says what a failure before the move left",
+			func(s []string) bool { return mentions(s, "steps.promote.outcome") },
+			[]string{"if: failure() && steps.decide.outputs.publish == 'true' && steps.promote.outcome == 'skipped'"},
+		},
+	}
+	at := make([]int, 0, len(order))
+	before := ""
+	for _, o := range order {
+		var found []int
+		for j, step := range steps {
+			if o.find(step) {
+				found = append(found, j)
+			}
+		}
+		if len(found) != 1 {
+			t.Fatalf("the publish job has %d steps where it %s, not one", len(found), o.what)
+		}
+		for _, want := range o.want {
+			if !hasLine(steps[found[0]], want) {
+				t.Errorf("the step that %s has no line %q", o.what, want)
+			}
+		}
+		if len(at) > 0 && found[0] <= at[len(at)-1] {
+			t.Errorf("the step that %s runs before the one that %s", o.what, before)
+		}
+		at, before = append(at, found[0]), o.what
+	}
+	if at[len(at)-1] != len(steps)-1 {
+		t.Error("the step that says what a failure left is not the publish job's last")
+	}
+
+	promote, last := steps[at[4]], steps[at[6]]
+	if mentions(promote, "--annotation") {
+		t.Error("the step that moves the tag passes --annotation, so buildx writes a new index with a digest nothing attested")
+	}
+	message := strings.Join(trimmed(last), "\n")
+	for _, want := range []string{"No public tag moved", "Re-running the failed job publishes"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("the step that says what a failure left does not say %q", want)
+		}
+	}
+
+	// Which steps tag what, and which name :<app> as a destination.
+	for i, step := range steps {
+		var tags []string
+		for _, line := range step {
+			for _, m := range tagFlag.FindAllStringSubmatch(line, -1) {
+				tags = append(tags, m[1])
+			}
+		}
+		var want []string
+		switch i {
+		case at[1]:
+			want = []string{`"${IMAGE}:${APP}-staging"`}
+		case at[4]:
+			want = []string{`"${IMAGE}:${APP}"`}
+		}
+		if !slices.Equal(tags, want) {
+			t.Errorf("publish step %d (%s) tags %q, not %q", i+1, strings.TrimSpace(step[0]), tags, want)
+		}
+		for _, line := range step {
+			if strings.Contains(line, `docker://${IMAGE}:${APP}"`) && !strings.Contains(line, "no-creds") {
+				t.Errorf("publish step %d (%s) writes to %s: %q", i+1, strings.TrimSpace(step[0]), "${IMAGE}:${APP}", strings.TrimSpace(line))
+			}
+		}
+	}
+}
+
 // The shared Renovate managers' patterns for the two build tools the
 // workflow pins (divbast/renovate-config's default.json, customManagers),
 // as Renovate reads them: a pin in any other shape is one Renovate never
@@ -368,6 +521,11 @@ func topLevel(workflow []string, name string) []string {
 		return workflow[i+1 : end]
 	}
 	return nil
+}
+
+// hasID returns whether a step's id: is id.
+func hasID(id string) func([]string) bool {
+	return func(step []string) bool { return slices.Contains(trimmed(step), "id: "+id) }
 }
 
 // hasLine returns whether a line of step is want once trimmed, or want

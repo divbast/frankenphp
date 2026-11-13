@@ -134,6 +134,16 @@ this project's one record of LLM involvement.
   pull request still go red. A leg uploads its carrier as its last step,
   which is what makes the download the gate.
   `cmd/frankenphp-manifest/workflow_test.go` holds the gate
+- **`:<app>` moves only once its index is attested and verified.** The
+  publish job stages the index as `:<app>-staging`, attests that digest,
+  fetches the index's bytes by digest, checks they hash to it and runs
+  apps' own `gh attestation verify` on the file; then a single-source
+  `imagetools create` with no annotations points `:<app>` at the same
+  bytes and digest. Anything that fails before the move leaves `:<app>` on
+  the index it already held, and the job's last step says so: re-running
+  the failed job publishes. The publish decision reads only `:<app>`, so a
+  staged index never counts as published.
+  `cmd/frankenphp-manifest/workflow_test.go` holds the order
 - **BuildKit and mise are pinned in `build.yml`**, BuildKit by digest in
   each `docker/setup-buildx-action`'s `driver-opts`, mise as the
   workflow's `MISE_VERSION`, which every `jdx/mise-action` step passes as
