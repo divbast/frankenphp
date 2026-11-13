@@ -973,3 +973,84 @@ func miseTools(t *testing.T) map[string]bool {
 	}
 	return tools
 }
+
+// miseIsolationProblems reports every way the job lets what mise makes of
+// the repository's mise.toml reach its steps (FP-1, backlog; the rule is
+// divbast/ci's CI-12, so it holds the same in both repositories):
+//
+//   - each jdx/mise-action step sets env, export_path and add_shims_to_path
+//     to "false". All three default to true, under which the action writes
+//     mise.toml's [env], the PATH entries mise makes and its shims'
+//     directory into every later step, where a BASH_ENV or a PATH would
+//     change what the pinned scripts run without a line of them changing;
+//   - go and just run only through `mise exec --`, which gives that one
+//     command the toolchain and the [env] of mise.toml, and nothing else.
+func miseIsolationProblems(job []string) []string {
+	var problems []string
+	for i, line := range job {
+		trimmedLine := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmedLine, "#"):
+		case strings.Contains(trimmedLine, "uses: jdx/mise-action@"):
+			for _, input := range []string{"env", "export_path", "add_shims_to_path"} {
+				got, _ := stepWith(job, i, input)
+				if strings.Trim(got, `"'`) != "false" {
+					problems = append(problems, fmt.Sprintf("the publish job's jdx/mise-action sets %s: %q, not \"false\", so what mise makes of mise.toml reaches every later step", input, got))
+				}
+			}
+		case !allThroughMise(trimmedLine):
+			problems = append(problems, fmt.Sprintf("the publish job runs %q, not through mise exec --, so it needs mise's PATH", trimmedLine))
+		}
+	}
+	return problems
+}
+
+// bareTool matches go or just as a command word: after the start of a line
+// or a step's run:, a space, an opening parenthesis, a pipe or a semicolon.
+var bareTool = regexp.MustCompile(`(?:^|[\s(|;&])(?:go|just)\s+[a-z./-]`)
+
+// allThroughMise returns whether every go or just command on the line is
+// preceded by mise exec --.
+func allThroughMise(line string) bool {
+	for _, at := range bareTool.FindAllStringIndex(line, -1) {
+		if !strings.HasSuffix(strings.TrimRight(line[:at[0]], " "), "mise exec --") {
+			return false
+		}
+	}
+	return true
+}
+
+// TestPublishMiseIsolated checks miseIsolationProblems against the publish
+// job as it is, then with each way of leaking mise.toml's [env] or PATH into
+// the job, which it must refuse (FP-1).
+func TestPublishMiseIsolated(t *testing.T) {
+	t.Parallel()
+	job := jobLines(readLines(t, ".github", "workflows", "build.yml"), "publish")
+	if job == nil {
+		t.Fatal("build.yml has no publish job")
+	}
+	if got := miseIsolationProblems(job); len(got) != 0 {
+		t.Errorf("the publish job: %q", got)
+	}
+	text := strings.Join(job, "\n")
+	for name, mutant := range map[string]string{
+		"env left at its default":         strings.Replace(text, "          env: \"false\"\n", "", 1),
+		"env on":                          strings.Replace(text, "          env: \"false\"\n", "          env: \"true\"\n", 1),
+		"export_path left at its default": strings.Replace(text, "          export_path: \"false\"\n", "", 1),
+		"export_path on":                  strings.Replace(text, "          export_path: \"false\"\n", "          export_path: true\n", 1),
+		"shims left on PATH":              strings.Replace(text, "          add_shims_to_path: \"false\"\n", "", 1),
+		"shims on":                        strings.Replace(text, "          add_shims_to_path: \"false\"\n", "          add_shims_to_path: true\n", 1),
+		"just off mise's PATH":            strings.Replace(text, "mise exec -- just ci-checkout", "just ci-checkout", 1),
+		"go off mise's PATH":              strings.Replace(text, "mise exec -- go run", "go run", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if mutant == text {
+				t.Fatal("the change changed nothing")
+			}
+			if len(miseIsolationProblems(strings.Split(mutant, "\n"))) == 0 {
+				t.Error("passes the publish job with " + name)
+			}
+		})
+	}
+}

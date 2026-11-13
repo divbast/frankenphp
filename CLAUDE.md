@@ -212,6 +212,14 @@ this project's one record of LLM involvement.
   mise release at least a day old. divbast/renovate-config's shared
   managers move them, and read them only in exactly these shapes, which
   `cmd/frankenphp-manifest/workflow_test.go` holds
+- **The publish job takes nothing from `mise.toml` but its tools.** Its
+  `jdx/mise-action` step sets `env`, `export_path` and `add_shims_to_path`
+  to `"false"`, since each defaults to true and would write `mise.toml`'s
+  `[env]`, its PATH entries and its shims into every later step, where a
+  `BASH_ENV` or a `PATH` would change what the pinned scripts run. `go` and
+  `just` run as `mise exec -- go` and `mise exec -- just`, which gives that
+  one command the toolchain and the `[env]`. This is divbast/ci's rule for
+  its own publish job, held here by `TestPublishMiseIsolated`
 
 ## Key commands
 

@@ -631,14 +631,14 @@ func checkPass(t *testing.T, r *stepResult, pass bool) {
 }
 
 // stubBin returns a directory holding each stub in testdata/stubs under
-// the name of the command it stands in for: tool.sh stands in for git and
-// go, by the name it runs as.
+// the name of the command it stands in for: tool.sh stands in for git, go
+// and mise, by the name it runs as.
 func stubBin(t *testing.T) string {
 	t.Helper()
 	bin := t.TempDir()
 	for name, file := range map[string]string{
 		"docker": "docker.sh", "gh": "gh.sh", "skopeo": "skopeo.sh", "sleep": "sleep.sh",
-		"git": "tool.sh", "go": "tool.sh",
+		"git": "tool.sh", "go": "tool.sh", "mise": "tool.sh",
 	} {
 		stub, err := filepath.Abs(filepath.Join("testdata", "stubs", file))
 		if err != nil {
