@@ -199,14 +199,17 @@ jobs:
 
   # One per app. Both architectures this run built publish together, or
   # neither does: the index is made from the two images this job pushed,
-  # by digest, so it never mixes runs.
+  # by digest, so it never mixes runs. Each app's job waits for lint and
+  # the build matrix but runs even when a leg failed, so one app's broken
+  # build holds back only its own publish: that app's job fails fetching
+  # the carrier its leg never uploaded, before it pushes anything, while
+  # the other app's publishes. The run still ends red, through required.
+  # cmd/frankenphp-manifest/workflow_test.go holds the condition below.
   publish:
     name: publish (${{ matrix.app }})
-    needs: required
+    needs: [lint, build]
     # From main only: a merge, the daily rebuild and the button.
-    if: >-
-      github.ref == 'refs/heads/main'
-      && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    if: ${{ !cancelled() && needs.lint.result == 'success' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     strategy:
       # One app's failure must not cancel the other's publish halfway.
       fail-fast: false
@@ -257,7 +260,8 @@ jobs:
         with:
           driver-opts: image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
 
-      # Both, or the job fails here, before anything is pushed.
+      # Both, or the job fails here, before anything is pushed: a leg
+      # uploads its carrier as its last step, so a failed leg uploads none.
       - name: Fetch the amd64 carrier
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:

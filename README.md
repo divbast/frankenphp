@@ -175,6 +175,10 @@ or whose records are for another app or architecture.
 Both architectures of a run publish together, or neither does, and a tag
 never moves back to an older commit than the one it holds.
 
+Each app publishes on its own. A build that fails for one app stops only
+that app's publish, before it pushes anything, while the other app's goes
+ahead; the run still fails, as a pull request with that failure does.
+
 ## Working here
 
 ```sh

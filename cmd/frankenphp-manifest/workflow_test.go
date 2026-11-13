@@ -158,6 +158,101 @@ func TestPublishJobInstallsOnlyWhatItRuns(t *testing.T) {
 // installs matches a command that installs every tool in mise.toml.
 var installs = regexp.MustCompile(`\bjust\s+setup\b|\bmise\s+install\b`)
 
+// The publish job's needs: and if:. Each app's job waits for lint and for
+// the whole build matrix, and still runs when a leg of it failed, so one
+// app's broken build holds back only its own publish: that app's job then
+// fails fetching the carrier its leg never uploaded, before it pushes
+// anything (TestPublishDownloadsBeforePush). Pull requests still need
+// every job, through required.
+const (
+	publishNeeds = "[lint, build]"
+	publishIf    = "${{ !cancelled() && needs.lint.result == 'success' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}"
+)
+
+// TestPublishGatedPerApp checks that the publish job's needs: and if: are
+// publishNeeds and publishIf, exactly, and that required, the one check
+// main's ruleset requires, still needs lint and every build leg.
+func TestPublishGatedPerApp(t *testing.T) {
+	t.Parallel()
+	workflow := readLines(t, ".github", "workflows", "build.yml")
+	for _, tc := range []struct{ job, key, want string }{
+		{"publish", "needs", publishNeeds},
+		{"publish", "if", publishIf},
+		{"required", "needs", "[lint, build]"},
+		{"required", "if", "always()"},
+	} {
+		t.Run(tc.job+" "+tc.key, func(t *testing.T) {
+			t.Parallel()
+			job := jobLines(workflow, tc.job)
+			if job == nil {
+				t.Fatalf("build.yml has no %s job", tc.job)
+			}
+			got, ok := jobKey(job, tc.key)
+			switch {
+			case !ok:
+				t.Errorf("the %s job sets no %s:", tc.job, tc.key)
+			case got != tc.want:
+				t.Errorf("the %s job's %s: is %q, not %q", tc.job, tc.key, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPublishDownloadsBeforePush checks what keeps a broken app's publish
+// from pushing anything once publishIf lets it run: the publish job
+// fetches both of its app's carriers, with no if: or continue-on-error:
+// that could pass over a missing one, before its first skopeo copy; and
+// each build leg uploads its carrier as its last step, so a leg that
+// failed at any step uploads none.
+func TestPublishDownloadsBeforePush(t *testing.T) {
+	t.Parallel()
+	workflow := readLines(t, ".github", "workflows", "build.yml")
+	publish := stepLines(jobLines(workflow, "publish"))
+	firstCopy := slices.IndexFunc(publish, func(step []string) bool { return mentions(step, "skopeo copy") })
+	if firstCopy < 0 {
+		t.Fatal("the publish job runs no skopeo copy")
+	}
+	for _, arch := range []string{"amd64", "arm64"} {
+		name := "name: carrier-${{ matrix.app }}-" + arch
+		at := slices.IndexFunc(publish, func(step []string) bool {
+			return mentions(step, "uses: actions/download-artifact@") && hasLine(step, name)
+		})
+		switch {
+		case at < 0:
+			t.Errorf("the publish job never downloads %s", name)
+			continue
+		case at > firstCopy:
+			t.Errorf("the publish job downloads %s after its first skopeo copy", name)
+		}
+		for _, line := range trimmed(publish[at]) {
+			if strings.HasPrefix(line, "if:") || strings.HasPrefix(line, "continue-on-error:") {
+				t.Errorf("the publish job's download of %s sets %q, so a missing carrier need not fail it", name, line)
+			}
+		}
+	}
+
+	build := stepLines(jobLines(workflow, "build"))
+	if len(build) == 0 {
+		t.Fatal("build.yml's build job has no steps")
+	}
+	last := build[len(build)-1]
+	if !mentions(last, "uses: actions/upload-artifact@") {
+		t.Errorf("the build job's last step is not its upload-artifact step: %q", trimmed(last))
+	}
+	for _, want := range []string{"name: carrier-${{ matrix.app }}-${{ matrix.arch }}", "if-no-files-found: error"} {
+		if !hasLine(last, want) {
+			t.Errorf("the build job's last step has no line %q", want)
+		}
+	}
+	for _, step := range build {
+		for _, line := range trimmed(step) {
+			if strings.HasPrefix(line, "continue-on-error:") {
+				t.Errorf("a build step sets %q, so a leg could upload a carrier after a failed step", line)
+			}
+		}
+	}
+}
+
 // The shared Renovate managers' patterns for the two build tools the
 // workflow pins (divbast/renovate-config's default.json, customManagers),
 // as Renovate reads them: a pin in any other shape is one Renovate never
@@ -214,6 +309,24 @@ func TestBuildToolsPinned(t *testing.T) {
 	}
 }
 
+// jobKey returns the value of the job's own key, one indent below the
+// job's name and before its steps:, trimmed, and whether the job sets it.
+func jobKey(job []string, key string) (string, bool) {
+	for _, line := range job[1:] {
+		if indent(line) != 4 {
+			continue
+		}
+		trimmedLine := strings.TrimSpace(line)
+		if trimmedLine == "steps:" {
+			break
+		}
+		if value, ok := strings.CutPrefix(trimmedLine, key+":"); ok {
+			return strings.TrimSpace(value), true
+		}
+	}
+	return "", false
+}
+
 // stepWith returns the value of key in the with: of the step whose uses:
 // is workflow[at], trimmed, and whether the step sets it there.
 func stepWith(workflow []string, at int, key string) (string, bool) {
@@ -255,6 +368,29 @@ func topLevel(workflow []string, name string) []string {
 		return workflow[i+1 : end]
 	}
 	return nil
+}
+
+// hasLine returns whether a line of step is want once trimmed, or want
+// continued onto the next line with a backslash.
+func hasLine(step []string, want string) bool {
+	return slices.ContainsFunc(step, func(line string) bool {
+		line = strings.TrimSpace(line)
+		return line == want || line == want+` \`
+	})
+}
+
+// mentions returns whether any line of step contains s.
+func mentions(step []string, s string) bool {
+	return slices.ContainsFunc(step, func(line string) bool { return strings.Contains(line, s) })
+}
+
+// trimmed returns lines with each line's blanks trimmed.
+func trimmed(lines []string) []string {
+	out := make([]string, len(lines))
+	for i, line := range lines {
+		out[i] = strings.TrimSpace(line)
+	}
+	return out
 }
 
 // jobEnv returns which lines of job, as jobLines returns it, are in the

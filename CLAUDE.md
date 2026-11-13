@@ -127,6 +127,13 @@ this project's one record of LLM involvement.
 - **Both architectures publish together or not at all.** The index is made
   from the two images the publish job pushed, by digest, and a tag never
   moves to an older commit than the one it holds
+- **Each app publishes on its own.** `publish` needs `lint` and `build`
+  and runs unless the run was cancelled or lint failed, so a failed leg
+  fails only its own app's publish, at the carrier download, before
+  anything is pushed. `required` still needs every job, so the run and any
+  pull request still go red. A leg uploads its carrier as its last step,
+  which is what makes the download the gate.
+  `cmd/frankenphp-manifest/workflow_test.go` holds the gate
 - **BuildKit and mise are pinned in `build.yml`**, BuildKit by digest in
   each `docker/setup-buildx-action`'s `driver-opts`, mise as the
   workflow's `MISE_VERSION`, which every `jdx/mise-action` step passes as
