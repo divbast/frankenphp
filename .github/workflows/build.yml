@@ -58,7 +58,7 @@ defaults:
 jobs:
   lint:
     name: lint
-    uses: divbast/ci/.github/workflows/lint.yml@aad6b008203219be9fa3ffd39696d8ab2f9afedc # v1.26.0
+    uses: divbast/ci/.github/workflows/lint.yml@51aba8dedb3f933246d7ecc7497c879f6aa6941a # v1.32.0
     permissions:
       contents: read
 
