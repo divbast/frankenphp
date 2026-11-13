@@ -374,8 +374,9 @@ jobs:
       # anonymous client gets them, and must hash back to it; gh then
       # verifies that file, and never reads a registry login. The
       # attestation was written seconds ago, so gh gets three tries, ten
-      # seconds apart. A failure that a re-run cannot mend sets lasting,
-      # so the last step does not say one will.
+      # seconds apart. A failed fetch names its own remedy, the package's
+      # settings, and sets lasting, so the last step does not point at a
+      # re-run in its place. publish_test.go runs this script.
       - name: Verify the attestation as apps do
         if: steps.decide.outputs.publish == 'true'
         id: verify
@@ -383,19 +384,19 @@ jobs:
           DIGEST: ${{ steps.stage.outputs.digest }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ! skopeo inspect --raw --no-creds "docker://${IMAGE}@${DIGEST}" >/tmp/staged-index.json; then
+          if ! skopeo inspect --raw --no-creds "docker://${IMAGE}@${DIGEST}" >"${RUNNER_TEMP}/staged-index.json"; then
             echo "lasting=true" >> "${GITHUB_OUTPUT}"
             echo "::error::${IMAGE}@${DIGEST} is not anonymously pullable, so the app's tag ${IMAGE}:${APP} didn't move. If the package is private, as its first push can leave it, the owner makes it public in its settings (https://github.com/orgs/divbast/packages/container/frankenphp/settings); nothing in this workflow can."
             exit 1
           fi
-          fetched=$(sha256sum /tmp/staged-index.json)
+          fetched=$(sha256sum "${RUNNER_TEMP}/staged-index.json")
           if [ "sha256:${fetched%% *}" != "${DIGEST}" ]; then
             echo "::error::${IMAGE}@${DIGEST} came back as bytes that hash to sha256:${fetched%% *}."
             exit 1
           fi
           empty=$(mktemp -d)
           for try in 1 2 3; do
-            if DOCKER_CONFIG="${empty}" gh attestation verify /tmp/staged-index.json \
+            if DOCKER_CONFIG="${empty}" gh attestation verify "${RUNNER_TEMP}/staged-index.json" \
               --repo divbast/frankenphp \
               --signer-workflow divbast/frankenphp/.github/workflows/build.yml@refs/heads/main \
               --source-ref refs/heads/main; then
@@ -411,15 +412,16 @@ jobs:
       # buildx shows the index the move would push, then a newline. Only
       # the attested bytes may go under :<app>, so anything else stops the
       # move before it runs, rather than the anonymous check finding it
-      # after the tag has moved.
+      # after the tag has moved. publish_test.go runs this script.
       - name: Check the move keeps the attested digest
         if: steps.decide.outputs.publish == 'true'
         id: keep
         env:
           DIGEST: ${{ steps.stage.outputs.digest }}
         run: |
-          docker buildx imagetools create --dry-run -t "${IMAGE}:${APP}" "${IMAGE}@${DIGEST}" >/tmp/promote-index.json
-          would=$(head -c -1 /tmp/promote-index.json | sha256sum)
+          docker buildx imagetools create --dry-run -t "${IMAGE}:${APP}" "${IMAGE}@${DIGEST}" >"${RUNNER_TEMP}/promote-index.json"
+          # The index without buildx's newline, the same on GNU and BSD tools
+          would=$(printf '%s' "$(<"${RUNNER_TEMP}/promote-index.json")" | sha256sum)
           if [ "sha256:${would%% *}" != "${DIGEST}" ]; then
             echo "lasting=true" >> "${GITHUB_OUTPUT}"
             echo "::error::Moving ${IMAGE}:${APP} would push an index that hashes to sha256:${would%% *}, not the attested ${DIGEST}, so the app's tag didn't move. buildx no longer copies a single index unchanged; a re-run would meet the same."

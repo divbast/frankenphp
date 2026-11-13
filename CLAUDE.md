@@ -145,13 +145,24 @@ this project's one record of LLM involvement.
   the move leaves `:<app>` on the index it already held, and the job's
   last step says so: re-running the failed job publishes while the build
   legs' carriers are kept (`retention-days: 1`), and after that the next
-  daily or push run does, unless the failing step said a re-run cannot
-  help. The publish decision reads only `:<app>`, so a staged index never
-  counts as published. The job's permissions stay `contents: read` and
-  `packages`, `id-token` and `attestations: write`; `created` comes from
-  the clock, not the run's API record, which would take `actions: read`.
-  `cmd/frankenphp-manifest/workflow_test.go` holds the order and the
-  permissions
+  daily or push run does, unless the failing step names its own remedy: a
+  failed anonymous fetch points at the package's settings, and a dry run
+  showing another digest says a re-run meets the same. The publish
+  decision reads only `:<app>`, so a staged index never counts as
+  published. The job's permissions stay `contents: read` and `packages`,
+  `id-token` and `attestations: write`; `created` comes from the clock,
+  not the run's API record, which would take `actions: read`.
+  `cmd/frankenphp-manifest/workflow_test.go` holds the order, the `if:`
+  gates and the permissions
+- **The publish job's shell is pinned line for line.** Every `run:` block
+  of the publish job must equal
+  `cmd/frankenphp-manifest/testdata/publish-shell.txt`, because no check
+  that reads the shell for writes to `:<app>` survives one written another
+  way. A change shows as a diff: read it, and only if it is meant run
+  `go test ./cmd/frankenphp-manifest/ -run '^TestPublishShellPinned$' -update`
+  and commit the file with it. `publish_test.go` also runs the verify and
+  dry-run steps' own scripts under bash against the stubs in
+  `testdata/stubs`, so a lost `exit 1` fails a test, not a publish
 - **BuildKit and mise are pinned in `build.yml`**, BuildKit by digest in
   each `docker/setup-buildx-action`'s `driver-opts`, mise as the
   workflow's `MISE_VERSION`, which every `jdx/mise-action` step passes as

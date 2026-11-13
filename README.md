@@ -191,7 +191,10 @@ moving the tag keeps the digest; only then does it point `:<app>` at that
 digest. A publish that fails before then leaves `:<app>` on the index it
 already held, though the staging and per-architecture tags may have moved.
 Re-running the failed job publishes for a day after the build, while its
-carriers are kept; after that, the next daily or push run publishes.
+carriers are kept; after that, the next daily or push run publishes. The
+exception is a failure that names its own remedy: an index no anonymous
+client can fetch points at the package's settings, and a dry run that
+shows another digest says a re-run would meet the same.
 
 ## Working here
 

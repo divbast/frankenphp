@@ -254,57 +254,26 @@ func TestPublishDownloadsBeforePush(t *testing.T) {
 	}
 }
 
-// The staged index's bytes as the publish job fetches them, and the
-// verification it runs on them before it moves :<app>: the one every
-// app's CI runs, divbast/ci's frankenphpref.Verify.
-const stagedIndex = "/tmp/staged-index.json"
-
-var verifyFlags = []string{
-	"--repo divbast/frankenphp",
-	"--signer-workflow divbast/frankenphp/.github/workflows/build.yml@refs/heads/main",
-	"--source-ref refs/heads/main",
-}
-
-// createdByClock is how the staged index's created annotation is dated:
-// by the clock as the publish job stages it. The commit's time would date
-// a daily republish of an unchanged commit by that commit, and the run's
-// own start time would take actions: read, which a job holding write
-// scopes does not get (TestPublishPermissionsUnchanged).
-const createdByClock = `created=$(date -u +%Y-%m-%dT%H:%M:%SZ)`
-
-// packageSettings is where the owner makes the package public, which no
-// workflow can, and so the hint a failed anonymous fetch gives.
-const packageSettings = "https://github.com/orgs/divbast/packages/container/frankenphp/settings"
-
 // publishOnly is the if: of every publish step from the first push to the
 // move: each runs only when the decision says publish, and no failure
 // before it lets it run.
 const publishOnly = "steps.decide.outputs.publish == 'true'"
 
-// tagFlag matches an imagetools create -t or --tag, and the tag it names.
-var tagFlag = regexp.MustCompile(`(?:^|\s)(?:-t|--tag)(?:\s+|=)("[^"]*"|\S+)`)
-
-// TestPublishAttestsBeforePromote checks that the publish job moves
-// :<app> only once the index it moves it to is attested and that
-// attestation verifies, so a failure on the way leaves the tag where it
-// was:
+// TestPublishAttestsBeforePromote checks the shape of the publish job
+// around the move of :<app>, which testdata/publish-shell.txt pins line
+// for line (TestPublishShellPinned) and publish_test.go runs:
 //
-//   - the job pushes each architecture, stages the index under
-//     :<app>-staging alone, dated by createdByClock, attests the staged
-//     digest, verifies it as a file fetched anonymously by that digest
-//     and hashed back to it, up to three times, has buildx show the index
-//     the move would push and refuses one that is not the attested
-//     digest, moves :<app> to the digest from one source with no
-//     annotations, and then checks the tag anonymously, in that order;
+//   - the job pushes each architecture, stages the index, attests the
+//     staged digest, verifies it, dry-runs the move, moves :<app> and
+//     checks the tag anonymously, in that order, each of the steps after
+//     the stage reading the staged digest;
 //   - every step from the push to the move runs only on publishOnly, and
 //     no step of the job sets continue-on-error:;
-//   - only the dry run and the move name :<app> as a tag, and every other
-//     line that names it is one of the decision's two reads or the
-//     anonymous check;
-//   - a last step, run on a failure that came before the move, says the
-//     app's tag did not move, and that re-running the failed job
-//     publishes while the carriers last and the next daily or push run
-//     after that, except where the failing step said a re-run cannot help.
+//   - a last step, run only on a failure that came before the move, says
+//     what it left, and leaves out the re-run advice when the failing
+//     step set lasting;
+//   - the build legs keep their carriers for the one day that note
+//     promises.
 func TestPublishAttestsBeforePromote(t *testing.T) {
 	t.Parallel()
 	workflow := readLines(t, ".github", "workflows", "build.yml")
@@ -313,14 +282,7 @@ func TestPublishAttestsBeforePromote(t *testing.T) {
 		t.Fatal("build.yml has no publish job")
 	}
 	steps := stepLines(job)
-	const (
-		fromStage  = "DIGEST: ${{ steps.stage.outputs.digest }}"
-		lasting    = `echo "lasting=true" >> "${GITHUB_OUTPUT}"`
-		decideRead = `skopeo copy --all --quiet --src-no-creds "docker://${IMAGE}:${APP}" oci-archive:/tmp/published.tar`
-		dryRun     = `docker buildx imagetools create --dry-run -t "${IMAGE}:${APP}" "${IMAGE}@${DIGEST}" >/tmp/promote-index.json`
-		move       = `run: docker buildx imagetools create -t "${IMAGE}:${APP}" "${IMAGE}@${DIGEST}"`
-		checkRead  = `if ! pulled=$(skopeo inspect --raw --no-creds "docker://${IMAGE}:${APP}" | sha256sum) ||`
-	)
+	const fromStage = "DIGEST: ${{ steps.stage.outputs.digest }}"
 
 	const (
 		push = iota
@@ -344,59 +306,21 @@ func TestPublishAttestsBeforePromote(t *testing.T) {
 			},
 			nil,
 		},
-		stage: {
-			"stages the index",
-			hasID("stage"),
-			[]string{
-				`-t "${IMAGE}:${APP}-staging"`,
-				`echo "digest=${digest}" >> "${GITHUB_OUTPUT}"`,
-				createdByClock,
-			},
-		},
+		stage: {"stages the index", hasID("stage"), nil},
 		attest: {
 			"attests the staged index",
 			func(s []string) bool { return mentions(s, "uses: actions/attest@") },
 			[]string{"subject-name: ghcr.io/divbast/frankenphp", "subject-digest: ${{ steps.stage.outputs.digest }}", "push-to-registry: true"},
 		},
-		verify: {
-			"verifies the attestation",
-			hasID("verify"),
-			[]string{
-				fromStage,
-				`if ! skopeo inspect --raw --no-creds "docker://${IMAGE}@${DIGEST}" >` + stagedIndex + `; then`,
-				lasting,
-				`if [ "sha256:${fetched%% *}" != "${DIGEST}" ]; then`,
-				`for try in 1 2 3; do`,
-				`if DOCKER_CONFIG="${empty}" gh attestation verify ` + stagedIndex,
-				`sleep 10`,
-				// The last flag closes the retry loop's if.
-				verifyFlags[0],
-				verifyFlags[1],
-				verifyFlags[2] + "; then",
-			},
-		},
-		keep: {
-			"checks the move keeps the attested digest",
-			hasID("keep"),
-			[]string{
-				fromStage,
-				dryRun,
-				`would=$(head -c -1 /tmp/promote-index.json | sha256sum)`,
-				`if [ "sha256:${would%% *}" != "${DIGEST}" ]; then`,
-				lasting,
-			},
-		},
-		promote: {
-			"moves the tag",
-			hasID("promote"),
-			[]string{fromStage, move},
-		},
+		verify:  {"verifies the attestation", hasID("verify"), []string{fromStage}},
+		keep:    {"checks the move keeps the attested digest", hasID("keep"), []string{fromStage}},
+		promote: {"moves the tag", hasID("promote"), []string{fromStage}},
 		check: {
 			"checks the tag anonymously",
 			func(s []string) bool {
 				return mentions(s, `skopeo inspect --raw --no-creds "docker://${IMAGE}:${APP}"`)
 			},
-			[]string{fromStage, checkRead},
+			[]string{fromStage},
 		},
 		note: {
 			"says what a failure before the move left",
@@ -404,7 +328,6 @@ func TestPublishAttestsBeforePromote(t *testing.T) {
 			[]string{
 				"if: failure() && " + publishOnly + " && steps.promote.outcome == 'skipped'",
 				"LASTING: ${{ steps.verify.outputs.lasting }}${{ steps.keep.outputs.lasting }}",
-				`if [ -z "${LASTING}" ]; then`,
 			},
 		},
 	}
@@ -447,60 +370,10 @@ func TestPublishAttestsBeforePromote(t *testing.T) {
 		}
 	}
 
-	if !mentions(steps[at[verify]], packageSettings) {
-		t.Errorf("the verify step's failed anonymous fetch does not point the owner at %s", packageSettings)
-	}
-	if strings.Contains(strings.ToLower(strings.Join(steps[at[verify]], "\n")), "re-run") {
-		t.Error("the verify step's own messages say a re-run helps; its failures that one can are left to the last step")
-	}
-	message := strings.Join(trimmed(steps[at[note]]), "\n")
-	for _, want := range []string{
-		"The app's tag ${IMAGE}:${APP} didn't move",
-		"Re-running the failed job publishes",
-		"the next daily or push run publishes",
-	} {
-		if !strings.Contains(message, want) {
-			t.Errorf("the step that says what a failure left does not say %q", want)
-		}
-	}
 	// The note's day is how long the build legs keep the carriers.
 	build := stepLines(jobLines(workflow, "build"))
 	if len(build) == 0 || !hasLine(build[len(build)-1], "retention-days: 1") {
 		t.Error("the build legs keep their carriers for other than one day, which the failure note says")
-	}
-
-	// Which steps tag what, and which name :<app> at all.
-	known := map[string]int{
-		decideRead: slices.IndexFunc(steps, hasID("decide")),
-		dryRun:     at[keep],
-		move:       at[promote],
-		checkRead:  at[check],
-	}
-	for i, step := range steps {
-		var tags []string
-		for _, line := range step {
-			for _, m := range tagFlag.FindAllStringSubmatch(line, -1) {
-				tags = append(tags, m[1])
-			}
-		}
-		var want []string
-		switch i {
-		case at[stage]:
-			want = []string{`"${IMAGE}:${APP}-staging"`}
-		case at[keep], at[promote]:
-			want = []string{`"${IMAGE}:${APP}"`}
-		}
-		if !slices.Equal(tags, want) {
-			t.Errorf("publish step %d (%s) tags %q, not %q", i+1, strings.TrimSpace(step[0]), tags, want)
-		}
-		for _, line := range trimmed(step) {
-			if !strings.Contains(line, `${IMAGE}:${APP}"`) || strings.HasPrefix(line, "if ! published=$(.ci/bin/divbast-published-revision") {
-				continue
-			}
-			if where, ok := known[line]; !ok || where != i {
-				t.Errorf("publish step %d (%s) names %s outside the decision's reads, the dry run, the move and the anonymous check: %q", i+1, strings.TrimSpace(step[0]), "${IMAGE}:${APP}", line)
-			}
-		}
 	}
 }
 
