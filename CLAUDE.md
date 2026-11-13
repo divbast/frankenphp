@@ -158,7 +158,10 @@ this project's one record of LLM involvement.
   of the publish job must equal
   `cmd/frankenphp-manifest/testdata/publish-shell.txt`, because no check
   that reads the shell for writes to `:<app>` survives one written another
-  way. A change shows as a diff: read it, and only if it is meant run
+  way. A step written in any YAML form but the plain one the extractor
+  reads, such as `run: |-`, a flow mapping or a `shell:` key, fails the
+  test rather than going unread. A change shows as a diff: read it, and
+  only if it is meant run
   `go test ./cmd/frankenphp-manifest/ -run '^TestPublishShellPinned$' -update`
   and commit the file with it. `publish_test.go` also runs the verify and
   dry-run steps' own scripts under bash against the stubs in

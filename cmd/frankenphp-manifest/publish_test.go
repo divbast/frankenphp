@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -62,7 +63,10 @@ func publishShell(t *testing.T) string {
 		t.Fatal("build.yml has no publish job")
 	}
 	var b strings.Builder
-	for _, step := range stepLines(job) {
+	for i, step := range stepLines(job) {
+		if err := checkStep(step); err != nil {
+			t.Fatalf("publish step %d (%s): %v. Write it as the other steps are written, or this cannot pin what it runs", i+1, strings.TrimSpace(step[0]), err)
+		}
 		script, ok := runBlock(step)
 		if !ok {
 			continue
@@ -74,6 +78,66 @@ func publishShell(t *testing.T) string {
 		fmt.Fprintf(&b, "## %s\n%s\n", name, script)
 	}
 	return b.String()
+}
+
+// stepKeys are the keys a publish step may set. Any other, shell: or
+// working-directory: among them, could change what a run: block does
+// without a line of it changing.
+var stepKeys = []string{"name", "id", "if", "uses", "with", "env", "run"}
+
+var (
+	// keyValue matches a step's own key and its value, the step's indent
+	// taken off.
+	keyValue = regexp.MustCompile(`^([a-z][a-z-]*):(?: (.*))?$`)
+	// entry matches one with: or env: entry, on one line.
+	entry = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*: \S`)
+)
+
+// checkStep returns an error unless step is written in the plain YAML
+// runBlock and stepKey read, so that nothing a step runs escapes them:
+// "- " and a key on its first line, each key once and from stepKeys, at
+// one indent; name, id, if, uses and an inline run as plain one-line
+// values; with and env as one-line entries one indent deeper; and a run
+// block as "|" alone, its lines deeper still. A block indicator such as
+// |- or >, a value on the next line, a flow mapping, a quoted key, an
+// anchor, an alias or a tag is refused, not read past.
+func checkStep(step []string) error {
+	keys := indent(step[0]) + 2
+	seen := map[string]bool{}
+	block, nested := false, false
+	for i, line := range step {
+		trimmedLine := strings.TrimSpace(line)
+		text := trimmedLine
+		switch {
+		case i == 0:
+			text = strings.TrimPrefix(text, "- ")
+		case trimmedLine == "", block && indent(line) > keys, strings.HasPrefix(trimmedLine, "#"):
+			continue
+		case nested && indent(line) == keys+2 && entry.MatchString(trimmedLine):
+			continue
+		case indent(line) != keys:
+			return fmt.Errorf("%q is neither one of the step's keys nor a one-line entry of its with or env", trimmedLine)
+		}
+		m := keyValue.FindStringSubmatch(text)
+		if m == nil {
+			return fmt.Errorf("%q is not a plain key and value", text)
+		}
+		key, value := m[1], m[2]
+		switch {
+		case !slices.Contains(stepKeys, key):
+			return fmt.Errorf("it sets %s:, which this does not read", key)
+		case seen[key]:
+			return fmt.Errorf("it sets %s: twice", key)
+		}
+		seen[key] = true
+		block, nested = key == "run" && value == "|", key == "with" || key == "env"
+		switch {
+		case block, nested && value == "":
+		case nested, value == "", strings.ContainsAny(value[:1], `|>&*!{["'`):
+			return fmt.Errorf("its %s: is %q, a form this does not read", key, value)
+		}
+	}
+	return nil
 }
 
 // runBlock returns the step's run: script as bash gets it, a line or a
