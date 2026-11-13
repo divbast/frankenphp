@@ -5,8 +5,8 @@
 // binary from the records in the carrier, and says what moved between two
 // of them. The build workflow runs it on each carrier it builds, which also
 // refuses a binary that carries a file capability, and the publish job on
-// the candidates and what is published, to decide whether a daily rebuild
-// publishes.
+// the candidates and what is published, to decide whether a merge's run or
+// the daily rebuild publishes.
 //
 // Usage:
 //
@@ -24,8 +24,12 @@
 // published for it in the OCI archive given as -published to the carrier
 // built for it, one change per line after the architecture, and nothing
 // when nothing did. An architecture with nothing published, or every one
-// when -published is left out, prints as "<arch>: not published". It wants
-// a carrier for each of amd64 and arm64, and refuses any carrier or
+// when -published is left out, prints as "<arch>: not published", and one
+// whose published records do not read as a manifest of this schema, as a
+// carrier's built before the schema last moved, as "<arch>: published
+// manifest unreadable (schema N)", N being the newest schema whose records
+// it holds. It wants a carrier for each of amd64 and arm64, and refuses any
+// carrier whose records cannot be read, and any carrier or readable
 // published image built for another app than APP.
 //
 // Exit codes:
@@ -34,8 +38,9 @@
 //	   -changes: the changes are printed, if any
 //	1  -compare: the manifests differ. -oci and -changes: an archive is
 //	   refused or cannot be read: its binary carries a file capability, it
-//	   holds no image for the architecture or one for another, or a record
-//	   is missing or unreadable; or -changes lacks a carrier for an
+//	   holds no image for the architecture or one for another, or one of a
+//	   carrier's records is missing or unreadable, which in a published
+//	   image -changes reports instead; or -changes lacks a carrier for an
 //	   architecture. stderr says which
 //	2  the command line is wrong, or -compare cannot read a manifest
 package main
@@ -217,9 +222,12 @@ func printChanges(stdout io.Writer, app, published string, args []string) error 
 		pair := manifest.Pair{Candidate: candidate}
 		if published != "" {
 			m, err := read(published, arch, app)
+			unreadable, isUnreadable := errors.AsType[*manifest.UnreadableError](err)
 			switch {
 			case err == nil:
 				pair.Published = &m
+			case isUnreadable:
+				pair.Unreadable = unreadable
 			case !errors.Is(err, manifest.ErrNoImage):
 				return err
 			}

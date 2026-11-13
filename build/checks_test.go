@@ -492,9 +492,42 @@ func TestRecords(t *testing.T) {
 	const (
 		cache    = `{"php-src":{"source":{"version":"8.5.12"}}}` + "\n"
 		manifest = `{"schema-version":1}` + "\n"
+		// Inputs of the shape the build passes, and none of them the
+		// Containerfile's own values, so that a records.sh writing those
+		// whatever it is given fails. The recipe is sha256sum's hash
+		// alone, without its file name, as build.yml passes it.
+		spcCommit = "0123456789abcdef0123456789abcdef01234567"
+		builder   = "registry.example.invalid/builder:test@sha256:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+		recipe    = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+		craft     = "php-version: \"8.5.12\"\nextensions: \"ctype,gd\"\n"
 	)
 	tests := []testCase{
 		{name: "ok"},
+		{name: "spc-unset", unset: []string{"SPC_COMMIT"}, want: []string{"SPC_COMMIT"}},
+		// A branch, which names no one commit
+		{name: "spc-not-a-commit", set: map[string]string{"SPC_COMMIT": "v3"}, want: []string{"SPC_COMMIT"}},
+		{name: "builder-unset", unset: []string{"BUILDER_IMAGE"}, want: []string{"BUILDER_IMAGE"}},
+		// A tag alone, which moves
+		{name: "builder-without-digest", set: map[string]string{"BUILDER_IMAGE": "dunglas/frankenphp:static-builder-gnu"}, want: []string{"BUILDER_IMAGE"}},
+		{name: "recipe-unset", unset: []string{"RECIPE_SHA256"}, want: []string{"RECIPE_SHA256"}},
+		// sha256sum's whole line, its file name included
+		{name: "recipe-with-file-name", set: map[string]string{"RECIPE_SHA256": recipe + "  -"}, want: []string{"RECIPE_SHA256"}},
+		{
+			name: "no-craft",
+			mutate: func(t *testing.T, env map[string]string) {
+				t.Helper()
+				remove(t, env["CRAFT"])
+			},
+			want: []string{"rendered craft.yml"},
+		},
+		{
+			name: "craft-empty",
+			mutate: func(t *testing.T, env map[string]string) {
+				t.Helper()
+				write(t, env["CRAFT"], "")
+			},
+			want: []string{"rendered craft.yml"},
+		},
 		{
 			name: "no-download-cache",
 			mutate: func(t *testing.T, env map[string]string) {
@@ -604,9 +637,16 @@ func TestRecords(t *testing.T) {
 			env["GO_BIN"] = goStub
 			env["XCADDY_BIN"] = filepath.Join(dist, "pkgroot", "go-xcaddy", "bin", "xcaddy")
 			env["RECORDS"] = filepath.Join(dist, "records")
+			// The build's own inputs, which the records stage declares as
+			// ARGs, and the craft.yml build-static.sh rendered
+			env["SPC_COMMIT"] = spcCommit
+			env["BUILDER_IMAGE"] = builder
+			env["RECIPE_SHA256"] = recipe
+			env["CRAFT"] = filepath.Join(dist, "craft.yml")
 			write(t, env["SPC_CACHE"], cache)
 			write(t, env["BUILD_MANIFEST"], manifest)
 			write(t, env["XCADDY_BIN"], "\x7fELF not really")
+			write(t, env["CRAFT"], craft)
 
 			env = tt.inputs(t, env)
 			before := tree(t, dist)
@@ -630,6 +670,10 @@ func TestRecords(t *testing.T) {
 				"extensions.txt":      strings.Join(extensions, "\n") + "\n",
 				"spc-cache.json":      cache,
 				"build-manifest.json": manifest,
+				"spc.txt":             spcCommit + "\n",
+				"builder.txt":         builder + "\n",
+				"craft.yml":           craft,
+				"recipe.txt":          recipe + "\n",
 			}
 			entries, err := os.ReadDir(env["RECORDS"])
 			if err != nil {

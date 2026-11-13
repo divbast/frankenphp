@@ -64,7 +64,11 @@ build-app APP:
     # frankenphp-buildargs refuses anything but the four inputs, and prints
     # one build argument per line: a value may hold spaces, never a newline.
     out=$(mise exec -- go run ./cmd/frankenphp-buildargs {{ quote(APP) }})
-    args=(--build-arg "APP="{{ quote(APP) }})
+    # The recipe the records stage writes down, hashed as build.yml hashes
+    # it: the Containerfile, then the app's file.
+    APP={{ quote(APP) }}
+    recipe=$(cat Containerfile "apps/${APP}.env" | sha256sum)
+    args=(--build-arg "APP=${APP}" --build-arg "RECIPE_SHA256=${recipe%% *}")
     while IFS= read -r arg; do
         args+=(--build-arg "${arg}")
     done <<<"${out}"

@@ -5,27 +5,34 @@
 // binaries from the records the build wrote beside it, and says what moved
 // between two of them.
 //
-// A manifest is what the daily rebuild compares with the published carrier
-// to decide whether to publish. spc resolves the Go toolchain and several C
-// libraries to their newest release while the build runs, so two builds of
-// one commit can hold different code without a commit to show for it;
-// nothing else in the image says so, and Trivy cannot see the libraries in
-// the binary.
+// A manifest is what a merge's run and the daily rebuild compare with the
+// published carrier to decide whether to publish: each publishes only when
+// an architecture's manifest moved. spc resolves the Go toolchain and
+// several C libraries to their newest release while the build runs, so two
+// builds of one commit can hold different code without a commit to show
+// for it; nothing else in the image says so, and Trivy cannot see the
+// libraries in the binary. And a merge can leave the binary as it was.
 //
 // It holds what decides the binary's code, and nothing that differs between
 // two builds of the same inputs: FrankenPHP, PHP and Caddy as the binary
 // reports them, the Go toolchain and every Go module it was built from, the
 // xcaddy that wrote its main module and ran its build, the PHP modules it
 // loads, and each C library spc built, as the version it resolved and the
-// hash of the source it fetched. It leaves out the time spc fetched each
-// source, the records' file times, the build's flags, which follow from
-// the spc commit, the toolchain and xcaddy, and spc's resolver rules, which
-// change only with the spc commit.
+// hash of the source it fetched. Beside those it holds what decides how the
+// binary was built, which the binary does not report: the spc commit, whose
+// recipes, patches and resolver rules built it; the builder image's digest,
+// for its compilers and headers; the hash of the craft.yml spc was given,
+// which holds the build's flags; and the recipe, the hash of the
+// Containerfile and the app's file, which hold every pin and every input of
+// the app's. It leaves out the time spc fetched each source and the
+// records' file times.
 package manifest
 
 import (
 	"bytes"
 	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,8 +46,8 @@ import (
 )
 
 // SchemaVersion is the Schema every Manifest this package makes carries.
-// Version 2 added Xcaddy.
-const SchemaVersion = 2
+// Version 2 added Xcaddy, and version 3 SPC, Builder, Craft and Recipe.
+const SchemaVersion = 3
 
 // Manifest is what went into one app's binary for one architecture.
 type Manifest struct {
@@ -62,6 +69,18 @@ type Manifest struct {
 	// v0.4.7, or a pseudo-version naming a commit. The build checks it
 	// against the Containerfile's XCADDY_VERSION.
 	Xcaddy string `json:"xcaddy"`
+	// SPC is the static-php-cli commit that built the binary, the
+	// Containerfile's SPC_COMMIT.
+	SPC string `json:"spc"`
+	// Builder is the digest of the builder image the binary was built in,
+	// from the Containerfile's BUILDER_IMAGE, such as sha256:4dcd….
+	Builder string `json:"builder"`
+	// Craft is the sha256, in hex, of the craft.yml build-static.sh
+	// rendered and spc built from.
+	Craft string `json:"craft"`
+	// Recipe is the sha256, in hex, of the Containerfile followed by the
+	// app's apps/<app>.env, as the build hashed them.
+	Recipe string `json:"recipe"`
 	// Extensions are the PHP modules it loads, as PHP names them, sorted.
 	Extensions []string `json:"extensions"`
 	// Libraries maps each C library spc built, and any PHP extension it
@@ -84,10 +103,45 @@ const (
 	recordExtensions    = "extensions.txt"
 	recordSPCCache      = "spc-cache.json"
 	recordBuildManifest = "build-manifest.json"
+	recordSPC           = "spc.txt"
+	recordBuilder       = "builder.txt"
+	recordCraft         = "craft.yml"
+	recordRecipe        = "recipe.txt"
 )
 
+// schemaRecords are the records each schema added, by version, up to
+// SchemaVersion: a manifest of one reads its own and every earlier
+// version's.
+var schemaRecords = [SchemaVersion + 1][]string{
+	1: {recordApp, recordVersion, recordBuildInfo, recordExtensions, recordSPCCache, recordBuildManifest},
+	2: {recordXcaddy},
+	3: {recordSPC, recordBuilder, recordCraft, recordRecipe},
+}
+
+// UnreadableError is records that do not read as a Manifest of
+// SchemaVersion, because one is missing or cannot be read or parsed.
+// FromRecords and FromOCIArchive return one, wrapped, for every such
+// failure, and for no other.
+type UnreadableError struct {
+	// Schema is the newest schema whose records are all there:
+	// SchemaVersion when every record is and one cannot be parsed, lower
+	// for the records of a build from before the next schema, and 0 when
+	// not even version 1's are all there.
+	Schema int
+	// Err says which records, and why.
+	Err error
+}
+
+// Error is Err's message, which names the records.
+func (e *UnreadableError) Error() string { return e.Err.Error() }
+
+// Unwrap returns Err, so that errors.Is finds fs.ErrNotExist for a record
+// that is missing.
+func (e *UnreadableError) Unwrap() error { return e.Err }
+
 // FromRecords reads the manifest from root, a directory holding the
-// records one build wrote.
+// records one build wrote. Records it cannot read as a manifest of
+// SchemaVersion return an error wrapping an *UnreadableError.
 func FromRecords(root *os.Root) (Manifest, error) {
 	return parse(root.ReadFile)
 }
@@ -96,17 +150,34 @@ func FromRecords(root *os.Root) (Manifest, error) {
 func parse(read func(name string) ([]byte, error)) (Manifest, error) {
 	files := map[string][]byte{}
 	var errs []error
-	for _, name := range []string{recordApp, recordVersion, recordBuildInfo, recordXcaddy, recordExtensions, recordSPCCache, recordBuildManifest} {
-		data, err := read(name)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("read the record %s: %w", name, err))
+	present := 0
+	for version := 1; version <= SchemaVersion; version++ {
+		for _, name := range schemaRecords[version] {
+			data, err := read(name)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("read the record %s: %w", name, err))
+				continue
+			}
+			files[name] = data
 		}
-		files[name] = data
+		if len(errs) == 0 {
+			present = version
+		}
 	}
 	if err := errors.Join(errs...); err != nil {
-		return Manifest{}, err
+		return Manifest{}, &UnreadableError{Schema: present, Err: err}
 	}
 
+	m, err := parseRecords(files)
+	if err != nil {
+		return Manifest{}, &UnreadableError{Schema: SchemaVersion, Err: err}
+	}
+	return m, nil
+}
+
+// parseRecords reads the manifest from files, every record by name.
+func parseRecords(files map[string][]byte) (Manifest, error) {
+	var errs []error
 	m := Manifest{Schema: SchemaVersion}
 	var err error
 	if m.App, err = parseApp(files[recordApp]); err != nil {
@@ -127,10 +198,69 @@ func parse(read func(name string) ([]byte, error)) (Manifest, error) {
 	if m.Libraries, err = parseLibraries(files[recordSPCCache], files[recordBuildManifest]); err != nil {
 		errs = append(errs, err)
 	}
+	if m.SPC, err = parseSPC(files[recordSPC]); err != nil {
+		errs = append(errs, err)
+	}
+	if m.Builder, err = parseBuilder(files[recordBuilder]); err != nil {
+		errs = append(errs, err)
+	}
+	if m.Craft, err = parseCraft(files[recordCraft]); err != nil {
+		errs = append(errs, err)
+	}
+	if m.Recipe, err = parseRecipe(files[recordRecipe]); err != nil {
+		errs = append(errs, err)
+	}
 	if err := errors.Join(errs...); err != nil {
 		return Manifest{}, err
 	}
 	return m, nil
+}
+
+var (
+	// fullCommit is a git commit's SHA-1, in full.
+	fullCommit = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	// sha256Hex is a sha256, as sha256sum prints it.
+	sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	// byDigest is an image reference that ends in its digest.
+	byDigest = regexp.MustCompile(`@(sha256:[0-9a-f]{64})$`)
+)
+
+// parseSPC reads spc.txt, the static-php-cli commit.
+func parseSPC(data []byte) (string, error) {
+	commit := string(bytes.TrimSpace(data))
+	if !fullCommit.MatchString(commit) {
+		return "", fmt.Errorf("%s: %q is not a full commit", recordSPC, commit)
+	}
+	return commit, nil
+}
+
+// parseBuilder reads builder.txt, the builder image's reference, and
+// returns its digest.
+func parseBuilder(data []byte) (string, error) {
+	ref := string(bytes.TrimSpace(data))
+	match := byDigest.FindStringSubmatch(ref)
+	if match == nil {
+		return "", fmt.Errorf("%s: %q names no sha256 digest", recordBuilder, ref)
+	}
+	return match[1], nil
+}
+
+// parseCraft returns the sha256 of craft.yml, exactly as spc read it.
+func parseCraft(data []byte) (string, error) {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return "", fmt.Errorf("%s: empty", recordCraft)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// parseRecipe reads recipe.txt, the recipe's sha256.
+func parseRecipe(data []byte) (string, error) {
+	hash := string(bytes.TrimSpace(data))
+	if !sha256Hex.MatchString(hash) {
+		return "", fmt.Errorf("%s: %q is not a sha256", recordRecipe, hash)
+	}
+	return hash, nil
 }
 
 func parseApp(data []byte) (string, error) {
@@ -325,6 +455,10 @@ func Diff(a, b Manifest) []string {
 		{"caddy", a.Caddy, b.Caddy},
 		{"go", a.Go, b.Go},
 		{"xcaddy", a.Xcaddy, b.Xcaddy},
+		{"spc", a.SPC, b.SPC},
+		{"builder", a.Builder, b.Builder},
+		{"craft", a.Craft, b.Craft},
+		{"recipe", a.Recipe, b.Recipe},
 	} {
 		if f.a != f.b {
 			lines = append(lines, f.name+": "+f.a+" → "+f.b)
@@ -371,8 +505,13 @@ func diffMap(kind string, a, b map[string]string) []string {
 // and the manifest of what is published for it.
 type Pair struct {
 	Candidate Manifest
-	// Published is nil when nothing is published for the architecture.
+	// Published is nil when nothing is published for the architecture, or
+	// when what is published cannot be read: see Unreadable.
 	Published *Manifest
+	// Unreadable is set, and Published nil, when the records of what is
+	// published do not read as a manifest of SchemaVersion, as a carrier's
+	// built before the schema last moved: that is the error that says so.
+	Unreadable *UnreadableError
 }
 
 // Arches are the architectures every carrier is built for. A publish
@@ -382,13 +521,17 @@ var Arches = []string{"amd64", "arm64"}
 // Changes says what moved between each architecture's published manifest
 // and its candidate, as the content-change text the publish decision takes:
 // each of Diff's lines after its architecture, such as "arm64: library
-// libaom: …", one per line, or "<arch>: not published" for an architecture
-// with nothing published. It returns "" when nothing moved.
+// libaom: …", one per line; "<arch>: not published" for an architecture
+// with nothing published; and "<arch>: published manifest unreadable
+// (schema N)" for one whose published records are Unreadable, which no
+// diff can be read from, so that the first build of a new schema
+// publishes. It returns "" when nothing moved.
 //
 // It refuses pairs that are not exactly one for each of Arches, or whose
 // manifests are for another architecture than their key: a publish that
 // compared only some architectures could push one that moved alongside one
-// it never looked at.
+// it never looked at. It refuses a pair that is both Published and
+// Unreadable, too.
 func Changes(pairs map[string]Pair) (string, error) {
 	var errs []error
 	for _, arch := range slices.Sorted(maps.Keys(pairs)) {
@@ -405,6 +548,12 @@ func Changes(pairs map[string]Pair) (string, error) {
 			continue
 		case p.Candidate.Arch != arch:
 			errs = append(errs, fmt.Errorf("%s: the candidate is for %q", arch, p.Candidate.Arch))
+			continue
+		case p.Unreadable != nil && p.Published != nil:
+			errs = append(errs, fmt.Errorf("%s: both a published manifest and why none could be read", arch))
+			continue
+		case p.Unreadable != nil:
+			lines = append(lines, fmt.Sprintf("%s: published manifest unreadable (schema %d)", arch, p.Unreadable.Schema))
 			continue
 		case p.Published == nil:
 			lines = append(lines, arch+": not published")

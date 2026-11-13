@@ -17,16 +17,17 @@ name: build
 
 on:
   pull_request:
-  # Every merge publishes what it built.
+  # A merge publishes what it built when either architecture's version
+  # manifest moved from the published one, as the publish job decides.
   push:
     branches: [main]
   schedule:
     # The daily rebuild, from scratch. spc resolves the Go toolchain and most
     # C libraries to their newest release while the build runs, so a
-    # rebuild of an unchanged main can hold different code. When main is
-    # still the published commit, it publishes only when the version
-    # manifest of either architecture moved; when main has moved past it,
-    # as after a merge whose own publish failed, it publishes main.
+    # rebuild of an unchanged main can hold different code. It publishes
+    # main only when the version manifest of either architecture moved from
+    # the published one, whether main is still the published commit or has
+    # moved past it, as after a merge whose own publish failed.
     # 12:13 UTC, early enough that a start GitHub gives hours late still
     # lands before the apps' own daily slots, which take the new binary.
     - cron: '13 12 * * *'
@@ -57,7 +58,7 @@ defaults:
 jobs:
   lint:
     name: lint
-    uses: divbast/ci/.github/workflows/lint.yml@cfdd11b8cb9851e4a040220b0e46d978e75ee74f # v1.19.0
+    uses: divbast/ci/.github/workflows/lint.yml@98d6302c61df9003bd4314c6f53ed7eb747d6c25 # v1.20.0
     permissions:
       contents: read
 
@@ -122,9 +123,13 @@ jobs:
           # Refuses an apps/<app>.env that sets anything but the four
           # inputs, and the substitution fails the step when it does.
           out=$(go run ./cmd/frankenphp-buildargs "${APP}")
+          # The recipe the records stage writes down, so that an edit to
+          # either file moves the carrier's manifest.
+          recipe=$(cat Containerfile "apps/${APP}.env" | sha256sum)
           mkdir -p /tmp/carrier
           args=(
             --target carrier --build-arg "APP=${APP}"
+            --build-arg "RECIPE_SHA256=${recipe%% *}"
             --secret 'id=github_token,env=GITHUB_TOKEN'
             --attest 'type=provenance,mode=max'
             --output 'type=oci,dest=/tmp/carrier/carrier.tar,rewrite-timestamp=true'
@@ -156,8 +161,9 @@ jobs:
 
       # Refuses a binary that carries a file capability, which no app could
       # exec under --cap-drop ALL, and records of another app or
-      # architecture. The daily run's publish job compares the same
-      # manifest with the published one's.
+      # architecture, or that this commit cannot read. The publish job of a
+      # merge or the daily run compares the same manifest with the
+      # published one's.
       - name: Read the carrier's manifest
         env:
           APP: ${{ matrix.app }}
@@ -273,16 +279,20 @@ jobs:
           name: carrier-${{ matrix.app }}-arm64
           path: /tmp/carriers/arm64
 
-      # Publish, skip or fail. A merge publishes its commit, and the button
-      # always publishes. The daily run publishes when main moved past what
-      # is published, and otherwise when either architecture's manifest
-      # moved from the published one. Only that run compares manifests: a
-      # merge's run, racing the daily run on the same commit, or a re-run
-      # with its old carriers, would otherwise publish libraries its build
-      # fetched earlier over what the daily run had just published. Nothing
-      # moves the tag back to an older commit either. It reads only
-      # :<app>, never the staging tag below, so an index staged but never
-      # promoted does not count as published.
+      # Publish, skip or fail. A merge and the daily run publish only when
+      # either architecture's manifest moved from the published one, so a
+      # merge that leaves the binary as it was moves no tag and asks no app
+      # for a digest bump; with nothing published, they publish. The button
+      # always publishes, and compares nothing. A merge's run compares only
+      # once main has moved past the published commit: on that commit, a
+      # content change publishes whatever the event, so a merge's run racing
+      # the daily run, or a re-run with its old carriers, would publish
+      # libraries its build fetched earlier over what the daily run had
+      # just published. Published records this commit cannot read, as a
+      # schema bump leaves, count as a change. Nothing moves the tag back to
+      # an older commit either. It reads only :<app>, never the staging tag
+      # below, so an index staged but never promoted does not count as
+      # published.
       # cmd/frankenphp-manifest/workflow_test.go holds the condition below.
       # GH_TOKEN tells a private package from an absent one.
       - name: Decide whether to publish
@@ -300,12 +310,14 @@ jobs:
             exit 1
           fi
           args=(-event "${EVENT}" -built "${GITHUB_SHA}" -published "${published}")
-          if [ "${EVENT}" = schedule ] && [ "${published}" = "${GITHUB_SHA}" ]; then
+          # A merge's run on the published commit compares nothing, and
+          # skips: see above.
+          if [[ -n "${published}" && ( "${EVENT}" == schedule || ( "${EVENT}" == push && "${published}" != "${GITHUB_SHA}" ) ) ]]; then
             # Every architecture, as an anonymous client pulls them
             skopeo copy --all --quiet --src-no-creds "docker://${IMAGE}:${APP}" oci-archive:/tmp/published.tar
             change=$(go run ./cmd/frankenphp-manifest -changes -app "${APP}" -published /tmp/published.tar \
               amd64=/tmp/carriers/amd64/carrier.tar arm64=/tmp/carriers/arm64/carrier.tar)
-            args+=(-content-change "${change}")
+            args+=(-content-change "${change}" -content-gated)
           fi
           .ci/bin/divbast-publish-decision "${args[@]}"
 
@@ -320,8 +332,9 @@ jobs:
       # it was, so apps never see a digest with no attestation, and the
       # move runs only once every step before it passed. A re-run of this
       # job decides against that tag and publishes again, while the build
-      # legs' carriers last; after that the next daily or push run does.
-      # The last step says so on a failure.
+      # legs' carriers last; after that the button does at once, and the
+      # next daily or push run does if its content moved from the published
+      # one. The last step says so on a failure.
       # cmd/frankenphp-manifest/workflow_test.go holds the order.
 
       # Each to its own tag, which only feeds the index below
@@ -462,6 +475,6 @@ jobs:
         run: |
           note="The app's tag ${IMAGE}:${APP} didn't move: it still names the index it named before this run."
           if [ -z "${LASTING}" ]; then
-            note+=" Re-running the failed job publishes within a day of the build, while its carriers are kept; after that, the next daily or push run publishes."
+            note+=" Re-running the failed job publishes within a day of the build, while its carriers are kept; after that, a manual run of build publishes at once, and the next daily or push run does if its content moved."
           fi
           echo "::error::${note}"

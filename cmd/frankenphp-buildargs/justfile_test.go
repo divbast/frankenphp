@@ -4,6 +4,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io/fs"
 	"os"
@@ -123,6 +125,29 @@ func TestBuildAppTakesOnlyAFineGrainedOrCIToken(t *testing.T) {
 			if strings.Contains(string(called), token) {
 				t.Errorf("the engine was given the token as an argument:\n%s", called)
 			}
+			// The recipe the records stage writes down, hashed as
+			// build.yml hashes it, and passed once: of two, the last
+			// would win
+			recipe := sha256.Sum256(slices.Concat(readFile(t, root, "Containerfile"), readFile(t, root, "apps", "librespeed.env")))
+			var recipes []string
+			for _, arg := range args {
+				if strings.HasPrefix(arg, "RECIPE_SHA256=") {
+					recipes = append(recipes, arg)
+				}
+			}
+			if want := "RECIPE_SHA256=" + hex.EncodeToString(recipe[:]); !slices.Equal(recipes, []string{want}) {
+				t.Errorf("the engine was passed %q, want only %s, the sha256 of the Containerfile and apps/librespeed.env", recipes, want)
+			}
 		})
 	}
+}
+
+// readFile reads the repository's file at the path elems name, under root.
+func readFile(t *testing.T, root string, elems ...string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(append([]string{root}, elems...)...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }

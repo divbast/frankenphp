@@ -4,9 +4,12 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -14,21 +17,29 @@ import (
 	"testing"
 )
 
-// manifestGuard is the one condition under which the build workflow's
-// publish job compares manifests: the daily rebuild of the commit already
-// published. A push or a re-run comparing too would publish what its own
-// build fetched over what a daily run had published since for the same
-// commit, which can be older.
-const manifestGuard = `if [ "${EVENT}" = schedule ] && [ "${published}" = "${GITHUB_SHA}" ]; then`
+// contentGate is the one condition under which the build workflow's
+// publish job compares manifests, and with them gates its publish: a push
+// or the daily rebuild, once anything is published, and a push only once
+// main has moved past the published commit. With main where it was
+// published, a content change publishes whatever started the run, and a
+// merge's run comparing there could publish what its own build fetched
+// over what a daily run had published since for the same commit, which
+// can be older. A manual run never compares, and always publishes.
+const contentGate = `if [[ -n "${published}" && ( "${EVENT}" == schedule || ( "${EVENT}" == push && "${published}" != "${GITHUB_SHA}" ) ) ]]; then`
 
-// TestWorkflowComparesOnlyForTheDailyRebuild reads the build workflow and
-// checks that fetching the published image, running -changes and passing
-// -content-change each happen once, directly inside manifestGuard.
-func TestWorkflowComparesOnlyForTheDailyRebuild(t *testing.T) {
+// TestContentGateOnPushAndSchedule reads the build workflow and checks
+// that fetching the published image, running -changes, passing
+// -content-change and passing -content-gated each happen once, directly
+// inside contentGate, so the publish is never gated without the compare
+// that gates it. It then runs the decide step's own script, as Actions
+// runs it, against stand-ins for git, go, skopeo and divbast/ci's tools,
+// for each event and each place the published commit can stand, and
+// checks which of them compare and what reaches the decision.
+func TestContentGateOnPushAndSchedule(t *testing.T) {
 	t.Parallel()
 	lines := readLines(t, ".github", "workflows", "build.yml")
 
-	for _, marker := range []string{"oci-archive:/tmp/published.tar", "frankenphp-manifest -changes", "-content-change"} {
+	for _, marker := range []string{"oci-archive:/tmp/published.tar", "frankenphp-manifest -changes", "-content-change", "-content-gated"} {
 		var at []int
 		for i, line := range lines {
 			if strings.Contains(line, marker) {
@@ -39,9 +50,167 @@ func TestWorkflowComparesOnlyForTheDailyRebuild(t *testing.T) {
 			t.Errorf("build.yml mentions %q on %d lines, not one", marker, len(at))
 			continue
 		}
-		if got := enclosingIf(lines, at[0]); got != manifestGuard {
-			t.Errorf("build.yml:%d (%s) sits inside %q, not %q", at[0]+1, marker, got, manifestGuard)
+		if got := enclosingIf(lines, at[0]); got != contentGate {
+			t.Errorf("build.yml:%d (%s) sits inside %q, not %q", at[0]+1, marker, got, contentGate)
 		}
+	}
+
+	script := publishStepScript(t, "decide")
+	const (
+		built  = "1111111111111111111111111111111111111111"
+		before = "2222222222222222222222222222222222222222"
+		change = "arm64: library libaom: v3.15.3 → v3.15.4"
+	)
+	for _, tc := range []struct {
+		name, event, published string
+		compares               bool
+	}{
+		{"a push with nothing published", "push", "", false},
+		{"a push of the published commit", "push", built, false},
+		{"a push past the published commit", "push", before, true},
+		{"the daily run with nothing published", "schedule", "", false},
+		{"the daily run of the published commit", "schedule", built, true},
+		{"the daily run past the published commit", "schedule", before, true},
+		{"a manual run of the published commit", "workflow_dispatch", built, false},
+		{"a manual run past the published commit", "workflow_dispatch", before, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			decision := filepath.Join(t.TempDir(), "decision-args")
+			env := map[string]string{
+				"EVENT": tc.event, "GITHUB_SHA": built, "GH_TOKEN": "stub",
+				"STUB_PUBLISHED": tc.published, "STUB_CHANGE": change,
+				"STUB_SKOPEO_BYTES": writeTemp(t, nil), "STUB_DECISION_ARGS": decision,
+			}
+			r := runStepIn(t, script, env, ciTools)
+			checkPass(t, r, true)
+
+			var compared []string
+			if tc.compares {
+				compared = []string{
+					"skopeo copy --all --quiet --src-no-creds docker://ghcr.io/divbast/frankenphp:baikal oci-archive:/tmp/published.tar",
+					"go run ./cmd/frankenphp-manifest -changes -app baikal -published /tmp/published.tar amd64=/tmp/carriers/amd64/carrier.tar arm64=/tmp/carriers/arm64/carrier.tar",
+				}
+			}
+			if got := r.callsTo("skopeo", "go"); !slices.Equal(got, compared) {
+				t.Errorf("the step ran\n\t%q\nnot\n\t%q", got, compared)
+			}
+			want := []string{"-event", tc.event, "-built", built, "-published", tc.published}
+			if tc.compares {
+				want = append(want, "-content-change", change, "-content-gated")
+			}
+			args := strings.Split(readFile(t, decision), "\x00")
+			if got := args[:len(args)-1]; !slices.Equal(got, want) {
+				t.Errorf("divbast-publish-decision got\n\t%q\nnot\n\t%q", got, want)
+			}
+		})
+	}
+}
+
+// ciTools lays out divbast/ci's tools in dir, where the decide step runs
+// them from: each a stand-in, testdata/stubs/tool.sh.
+func ciTools(t *testing.T, dir string) {
+	t.Helper()
+	bin := filepath.Join(dir, ".ci", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil { //nolint:gosec // G301: a test's own temporary directory
+		t.Fatal(err)
+	}
+	stub, err := filepath.Abs(filepath.Join("testdata", "stubs", "tool.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"divbast-published-revision", "divbast-publish-decision"} {
+		if err := os.Symlink(stub, filepath.Join(bin, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// recipeLine is how the build hashes the recipe, the Containerfile and
+// then the app's own file as one stream, and recipeArg how it passes
+// sha256sum's hash, without the file name after it, to the records stage.
+const (
+	recipeLine = `recipe=$(cat Containerfile "apps/${APP}.env" | sha256sum)`
+	recipeArg  = `--build-arg "RECIPE_SHA256=${recipe%% *}"`
+)
+
+// TestRecipeHashCoversBothFiles checks that the build workflow's build
+// step hashes the recipe with recipeLine and passes it with recipeArg, on
+// the one line of the step that names RECIPE_SHA256, and runs recipeLine
+// for each app, checking that it gives the sha256 of the
+// Containerfile followed by apps/<app>.env: an edit to either is then a
+// content change.
+func TestRecipeHashCoversBothFiles(t *testing.T) {
+	t.Parallel()
+	steps := stepLines(jobLines(readLines(t, ".github", "workflows", "build.yml"), "build"))
+	at := slices.IndexFunc(steps, func(step []string) bool { return hasLine(step, "- name: Build the carrier") })
+	if at < 0 {
+		t.Fatal("build.yml's build job has no step named Build the carrier")
+	}
+	if !hasLine(steps[at], recipeLine) {
+		t.Errorf("the build step does not hash the recipe as %s", recipeLine)
+	}
+	// Of two --build-arg RECIPE_SHA256, the last wins, so a second would
+	// replace the hash without this line changing.
+	var named []string
+	for _, line := range steps[at] {
+		if strings.Contains(line, "RECIPE_SHA256") {
+			named = append(named, strings.TrimSpace(line))
+		}
+	}
+	if len(named) != 1 || named[0] != recipeArg {
+		t.Errorf("the build step names RECIPE_SHA256 on %q, not once, as %s", named, recipeArg)
+	}
+
+	root := filepath.Join("..", "..")
+	containerfile := readFile(t, filepath.Join(root, "Containerfile"))
+	seen := map[string]string{}
+	for _, app := range []string{"baikal", "librespeed"} {
+		cmd := exec.CommandContext(t.Context(), "/bin/bash", "-euo", "pipefail", "-c", recipeLine+`; printf '%s' "${recipe%% *}"`)
+		cmd.Dir = root
+		cmd.Env = []string{"PATH=" + systemPath, "APP=" + app}
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("%s for %s: %v", recipeLine, app, err)
+		}
+		sum := sha256.Sum256([]byte(containerfile + readFile(t, filepath.Join(root, "apps", app+".env"))))
+		if want := hex.EncodeToString(sum[:]); string(out) != want {
+			t.Errorf("the recipe of %s hashes to %q, not %s, the sha256 of the Containerfile and apps/%s.env", app, out, want, app)
+		}
+		seen[string(out)] = app
+	}
+	if len(seen) != 2 {
+		t.Errorf("both apps' recipes hash to one value, %q", slices.Collect(maps.Keys(seen)))
+	}
+}
+
+// TestStallSlotsContentGated checks that every job of the stall workflow
+// that runs its slots check passes content-gated: true. The publish job
+// gates each publish on its content, so a daily slot can succeed and leave
+// an older commit published; without the input, stall counts each such
+// slot as lost and fails two days after any merge that left the binary as
+// it was.
+func TestStallSlotsContentGated(t *testing.T) {
+	t.Parallel()
+	workflow := readLines(t, ".github", "workflows", "stall.yml")
+	var slots []string
+	for _, name := range mappingKeys(topLevel(workflow, "jobs"), 2) {
+		job := jobLines(workflow, name)
+		at := slices.IndexFunc(job, func(line string) bool { return strings.HasPrefix(strings.TrimSpace(line), "uses: ") })
+		if at < 0 {
+			continue
+		}
+		checks, _ := stepWith(job, at, "checks")
+		if !strings.Contains(checks, `"slots"`) {
+			continue
+		}
+		slots = append(slots, name)
+		if gated, ok := stepWith(job, at, "content-gated"); !ok || gated != "true" {
+			t.Errorf("stall.yml's %s job runs the slots check with content-gated: %q, not true", name, gated)
+		}
+	}
+	if len(slots) == 0 {
+		t.Fatal("stall.yml has no job that runs the slots check")
 	}
 }
 

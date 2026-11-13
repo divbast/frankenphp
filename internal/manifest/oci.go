@@ -68,8 +68,9 @@ var blobName = regexp.MustCompile(`^blobs/sha256/([0-9a-f]{64})$`)
 //
 // It returns an error wrapping ErrFileCapability if the image's /frankenphp
 // carries a file capability, ErrNoImage if the archive holds no linux image
-// for arch, and ErrArch if the image's config or its binary's build
-// records name another architecture.
+// for arch, ErrArch if the image's config or its binary's build records
+// name another architecture, and an *UnreadableError if its records do not
+// read as a manifest of SchemaVersion.
 func FromOCIArchive(archive, arch string) (Manifest, error) {
 	m, err := fromOCIArchive(archive, arch)
 	if err != nil {

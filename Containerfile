@@ -168,12 +168,24 @@ RUN FRANKENPHP_BIN=/go/src/app/dist/frankenphp /tmp/extensions.sh
 
 FROM build AS records
 ARG APP
+# What built the binary without the binary saying so, which records.sh
+# reads from the environment. RECIPE_SHA256 is the sha256 of this file and
+# apps/<app>.env, which build.yml and just build-app compute and pass. It
+# is declared here and nowhere in the build stage: any edit to either file
+# gives it a new value, and an ARG puts its value in the cache key of every
+# step after it, so in the build stage a comment would rebuild the binary.
+# Here it reruns only records.sh.
+ARG BUILDER_IMAGE
+ARG SPC_COMMIT
+ARG RECIPE_SHA256
 COPY --chmod=0755 build/records.sh /tmp/records.sh
 # go-xcaddy is spc's package of the Go toolchain and the xcaddy that built
-# the binary, under the builder's PKG_ROOT_PATH.
+# the binary, under the builder's PKG_ROOT_PATH. build-static.sh renders
+# craft.yml into dist/ before spc reads it.
 RUN FRANKENPHP_BIN=/go/src/app/dist/frankenphp \
     SPC_CACHE=/go/src/app/dist/downloads/.cache.json \
     BUILD_MANIFEST=/go/src/app/dist/buildroot/build-manifest.json \
+    CRAFT=/go/src/app/dist/craft.yml \
     GO_BIN="${PKG_ROOT_PATH}/go-xcaddy/bin/go" \
     XCADDY_BIN="${PKG_ROOT_PATH}/go-xcaddy/bin/xcaddy" \
     RECORDS=/records \
