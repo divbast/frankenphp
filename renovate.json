@@ -52,18 +52,37 @@
       "depNameTemplate": "crazywhalecc/static-php-cli",
       "packageNameTemplate": "https://github.com/crazywhalecc/static-php-cli",
       "datasourceTemplate": "git-refs"
+    },
+    {
+      "customType": "regex",
+      "description": "ARG XCADDY_VERSION, the xcaddy the build stage installs over the one spc builds from xcaddy's master branch.",
+      "managerFilePatterns": ["/^Containerfile$/"],
+      "matchStrings": ["ARG XCADDY_VERSION=(?<currentValue>\\S+)"],
+      "depNameTemplate": "github.com/caddyserver/xcaddy",
+      "datasourceTemplate": "go"
+    },
+    {
+      "customType": "regex",
+      "description": "ARG LIBAOM_TAG, the AOM release tag spc clones libaom at in place of the head of its main branch. A tag, never a commit: spc clones it with git clone --branch.",
+      "managerFilePatterns": ["/^Containerfile$/"],
+      "matchStrings": ["ARG LIBAOM_TAG=(?<currentValue>\\S+)"],
+      "depNameTemplate": "libaom",
+      "packageNameTemplate": "https://aomedia.googlesource.com/aom",
+      "datasourceTemplate": "git-tags"
     }
   ],
   "packageRules": [
     {
-      "description": "Subject prefix for the binary's pinned roots, which are build inputs like the builder image the preset already gives build:.",
+      "description": "Subject prefix for the binary's pinned roots and the build inputs pinned beside them, xcaddy and libaom, which are build inputs like the builder image the preset already gives build:.",
       "matchDepNames": [
         "php/php-src",
         "github.com/caddyserver/caddy/v2",
         "github.com/dunglas/caddy-cbrotli",
         "github.com/dunglas/mercure/caddy",
         "github.com/dunglas/vulcain/caddy",
-        "crazywhalecc/static-php-cli"
+        "crazywhalecc/static-php-cli",
+        "github.com/caddyserver/xcaddy",
+        "libaom"
       ],
       "commitMessagePrefix": "build:"
     },
@@ -84,6 +103,11 @@
       "schedule": ["* 0-3,18-23 * * *"],
       "updateNotScheduled": false,
       "commitBody": "static-php-cli moved the head of its v3 branch, which has no tags, so the pinned commit fell behind it.\n\nDeveloped-by: Aryan Ameri <github@aryan.ameri.coffee>\nAssisted-by: <Renovate:renovate-{{{renovateVersion}}}>"
+    },
+    {
+      "description": "libaom at AOM's releases only. Beside its releases AOM tags release candidates (v3.15.3-rc1), research releases (research-v2.0.0) and 3GPP snapshots (3gpp-2021-10-15), which a lenient version parser could read as releases.",
+      "matchDepNames": ["libaom"],
+      "allowedVersions": "/^v\\d+\\.\\d+\\.\\d+$/"
     },
     {
       "matchDepNames": ["dunglas/frankenphp"],

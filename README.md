@@ -6,8 +6,8 @@
 The [FrankenPHP](https://github.com/php/frankenphp) binaries divbast's
 images run: PHP 8.5 and Caddy in one binary, built once per app with that
 app's PHP extensions, and attested. The builder image, FrankenPHP, PHP,
-Caddy and its plugins, and static-php-cli are pinned; the Go toolchain,
-xcaddy and most of the C libraries are chosen while the build runs, and
+Caddy and its plugins, xcaddy, static-php-cli and libaom are pinned; the Go
+toolchain and most of the C libraries are chosen while the build runs, and
 each carrier records what was chosen, as
 [What goes into a binary](#what-goes-into-a-binary) says.
 
@@ -62,10 +62,23 @@ Every app's binary is built by one `Containerfile` from the same pins:
 - the `dunglas/frankenphp:static-builder-gnu` image, by digest, which also
   holds the FrankenPHP source the binary is built from;
 - PHP, Caddy and Caddy's three plugins, by version;
-- static-php-cli (spc), which builds PHP and its C libraries, by commit.
+- xcaddy, which writes the binary's main module and runs its build, by
+  version;
+- static-php-cli (spc), which builds PHP and its C libraries, by commit;
+- libaom, the AV1 codec LibreSpeed's gd brings in through libavif, by AOM
+  release tag.
 
-`build/pinned-versions.sh` and `build/pinned-spc.sh` fail the build if the
-binary disagrees with a pin, or if anything but the pinned spc ran.
+`build/pinned-versions.sh`, `build/pinned-libaom.sh` and
+`build/pinned-spc.sh` fail the build if the binary or the xcaddy that built
+it disagrees with a pin, if spc cloned libaom at anything but the tag, or
+if anything but the pinned spc ran.
+
+spc would otherwise install xcaddy from its master branch on most builds,
+whenever it unpacks a newer Go than the builder image holds, and clone
+libaom at the head of its main branch. So the Containerfile unpacks spc's
+Go package before the build and installs the pinned xcaddy over the one spc
+built there, which spc then leaves alone, and adds a line to `craft.yml`
+that tells spc to clone libaom at the tag.
 
 What differs per app lives in `apps/<app>.env`: the PHP extensions and extra
 libraries to build, and the exact list of modules the binary must load,
@@ -76,20 +89,27 @@ both build through it.
 The pins do not fix every input. spc chooses these while the build runs:
 
 - the Go toolchain: the newest release go.dev lists;
-- xcaddy, which writes the binary's main module and runs its build: the
-  head of its `master` branch when spc fetches a newer Go than the builder
-  image holds, and otherwise the xcaddy the builder image installed;
-- libaom: the head of its main branch;
 - brotli, freetype, libavif, libjpeg, libpng, libwebp, libxml2, onig,
   openssl, watcher, xz and zlib: the newest GitHub release or tag that
   matches spc's rule for each;
 - libiconv: the newest in GNU's file listing.
 
-Of the libraries the two apps build, only sqlite and bzip2 come from fixed
-URLs in spc's config instead. A rebuild of an unchanged commit can
-therefore hold newer code, which is how fixes to the others arrive. The
-manifest below records each of these inputs, so the daily rebuild
-publishes when one moves.
+Of the libraries the two apps build, libaom comes from the tag above
+instead, and sqlite and bzip2 from fixed URLs in spc's config. A rebuild
+of an unchanged commit can therefore hold newer code in the others, which
+is how their fixes arrive. The manifest below records each of these
+inputs, so the daily rebuild publishes when one moves.
+
+sqlite stays at 3.45.2, the release spc's config names. Every
+`sqlite-autoconf` archive since 3.49 configures with autosetup, which
+refuses the `--with-pic` and `--enable-pic` that spc passes to every
+library it configures this way, so pointing spc at a newer one fails the
+build at sqlite's configure. Each advisory
+[sqlite.org lists](https://www.sqlite.org/cves.html) as fixed since 3.45.2
+needs an attacker who can run SQL of their own, write the database file,
+or pass out-of-range arguments to one of sqlite's C functions; in Baikal
+or LibreSpeed the first two take a SQL injection in the app, or write
+access to its data, first.
 
 ## The manifest
 
@@ -116,7 +136,7 @@ frankenphp-manifest -oci carrier.tar -arch arm64 -app librespeed
   "xcaddy": "v0.4.7",
   "extensions": ["Core", "PDO", "Phar", "…"],
   "libraries": {
-    "libaom": "dev-main+8a10385@8a1038536cde81c548341145f40d6dfddc3077d6",
+    "libaom": "dev-v3.15.3+b141d9c@b141d9c45db236335351c8a4b2a14b3ade27c937",
     "openssl": "openssl-3.6.5@89256e2bf2e5c761c9b4c49925d816f0e3b25fe4",
     "…": "…"
   },
@@ -124,11 +144,9 @@ frankenphp-manifest -oci carrier.tar -arch arm64 -app librespeed
 }
 ```
 
-`xcaddy` is the version Go recorded for the xcaddy that built the binary.
-spc installs it from its master branch when it fetches a newer Go than the
-builder image holds, and otherwise uses the one the builder image
-installed. Either way it reads as a release when that commit is one, as
-here, or else as a pseudo-version that names the commit.
+`xcaddy` is the version Go recorded for the xcaddy that built the binary,
+which `build/pinned-versions.sh` has already held to the Containerfile's
+`XCADDY_VERSION`.
 
 Each library is the version spc resolved, or the file it fetched when it
 names none, then the hash of that source: a SHA-1 for an archive, the
@@ -155,8 +173,7 @@ or whose records are for another app or architecture.
 - **A manual run** of `build` on main publishes at once.
 
 Both architectures of a run publish together, or neither does, and a tag
-never moves back to an older commit than the one it holds. LibreSpeed's
-binary takes libaom from its main branch, so its tag moves most days.
+never moves back to an older commit than the one it holds.
 
 ## Working here
 
@@ -172,9 +189,9 @@ just ci                               # every gate; run it before committing
 build without one. The token is there only to lift the rate limit on spc's
 calls to the GitHub API, which fail the build once the unauthenticated
 limit runs out. It reaches the build as a secret, so no layer holds it, but
-every build script spc runs can read it: each library's configure and make,
-libaom's from its main branch among them, the xcaddy install and the Go
-build.
+every build script spc runs while it builds the binary can read it: each
+library's configure and make, and the Go build. The step that installs
+xcaddy runs before that, without it.
 
 So use a fine-grained personal access token with **Repository access:
 Public repositories (read-only)** and no account or repository permissions

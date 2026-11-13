@@ -16,10 +16,9 @@
 #
 # spc resolves several library sources to their newest release at build
 # time, so its two files are the only record of which C libraries the
-# binary holds. It installs xcaddy from its master branch whenever it
-# fetches a newer Go than the builder's, and otherwise keeps the builder's
-# own, so xcaddy.txt is the only record of which commit built it. A record
-# set is whole or absent: nothing is written unless everything can be.
+# binary holds. xcaddy.txt records the xcaddy that built it, which
+# pinned-versions.sh has already held to XCADDY_VERSION. A record set is
+# whole or absent: nothing is written unless everything can be.
 set -euo pipefail
 export LC_ALL=C
 

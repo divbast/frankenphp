@@ -14,6 +14,7 @@
 
 "pipx:reuse" = "6.3.0"
 "aqua:casey/just" = "1.59.0"
+"aqua:jqlang/jq" = "1.8.2"
 
 [env]
 # The toolchain is the one pinned above, never one go.mod's toolchain line

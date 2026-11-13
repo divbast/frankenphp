@@ -6,13 +6,11 @@
 // between two of them.
 //
 // A manifest is what the daily rebuild compares with the published carrier
-// to decide whether to publish. spc resolves the Go toolchain to the newest
-// release, xcaddy to its master branch's head whenever that Go is newer than
-// the builder image's, several C libraries to their newest release, and
-// libaom to its branch's head, while the build runs, so two builds of one
-// commit can hold different code without a commit to show for it; nothing
-// else in the image says so, and Trivy cannot see the libraries in the
-// binary.
+// to decide whether to publish. spc resolves the Go toolchain and several C
+// libraries to their newest release while the build runs, so two builds of
+// one commit can hold different code without a commit to show for it;
+// nothing else in the image says so, and Trivy cannot see the libraries in
+// the binary.
 //
 // It holds what decides the binary's code, and nothing that differs between
 // two builds of the same inputs: FrankenPHP, PHP and Caddy as the binary
@@ -61,8 +59,8 @@ type Manifest struct {
 	Go string `json:"go"`
 	// Xcaddy is the version of the xcaddy module that wrote the binary's
 	// main module and ran its build, as Go records it: a release, such as
-	// v0.4.7, or a pseudo-version naming a commit of xcaddy's master
-	// branch, the one spc installed or else the builder image's own.
+	// v0.4.7, or a pseudo-version naming a commit. The build checks it
+	// against the Containerfile's XCADDY_VERSION.
 	Xcaddy string `json:"xcaddy"`
 	// Extensions are the PHP modules it loads, as PHP names them, sorted.
 	Extensions []string `json:"extensions"`
