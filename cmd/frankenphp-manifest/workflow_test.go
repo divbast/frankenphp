@@ -1059,6 +1059,92 @@ func TestPublishMiseIsolated(t *testing.T) {
 	}
 }
 
+// miseEnvProblems reads mise.toml's lines and returns each key of its [env]
+// table that bash reads at start: BASH_ENV and ENV, which bash sources
+// before a script, and BASH_FUNC_*, which it imports as functions. The
+// publish job runs `mise exec -- just ...`, and just starts bash from
+// inside that environment. It reads [env], [env.KEY], `env.KEY = ...` and an
+// inline `env = {...}`, with bare or quoted keys.
+func miseEnvProblems(lines []string) []string {
+	var problems []string
+	flag := func(key string) {
+		key = strings.Trim(strings.TrimSpace(key), `"'`)
+		if key == "BASH_ENV" || key == "ENV" || strings.HasPrefix(key, "BASH_FUNC_") {
+			problems = append(problems, key)
+		}
+	}
+	inEnv := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "[") {
+			header := strings.Trim(trimmed, "[] ")
+			inEnv = header == "env"
+			if key, ok := strings.CutPrefix(header, "env."); ok {
+				flag(key)
+			}
+			continue
+		}
+		key, value, ok := strings.Cut(trimmed, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		switch {
+		case inEnv:
+			flag(key)
+		case strings.HasPrefix(key, "env."):
+			flag(strings.TrimPrefix(key, "env."))
+		case key == "env" && strings.HasPrefix(strings.TrimSpace(value), "{"):
+			for pair := range strings.SplitSeq(strings.Trim(strings.TrimSpace(value), "{} "), ",") {
+				name, _, _ := strings.Cut(pair, "=")
+				flag(name)
+			}
+		}
+	}
+	return problems
+}
+
+// TestMiseEnvHoldsNoBashStartupKey fails when the repository's mise.toml
+// puts a key in [env] that bash reads at start. The publish job's
+// `mise exec -- just ci-checkout` and `ci-tools` start bash inside that
+// environment, so a BASH_ENV there would run before the pinned scripts
+// (FP-1, backlog). The mutants prove the reader sees each shape.
+func TestMiseEnvHoldsNoBashStartupKey(t *testing.T) {
+	t.Parallel()
+	shipped := readLines(t, "mise.toml")
+	if !slices.Contains(shipped, "[env]") {
+		t.Fatal("mise.toml has no [env] table; with none, this checks nothing of it")
+	}
+	if got := miseEnvProblems(shipped); len(got) != 0 {
+		t.Errorf("mise.toml's [env] holds %q", got)
+	}
+	for name, mutant := range map[string]string{
+		"BASH_ENV in [env]":   "[env]\nGOTOOLCHAIN = \"local\"\nBASH_ENV = \"/x\"\n",
+		"quoted BASH_ENV":     "[env]\n\"BASH_ENV\" = \"/x\"\n",
+		"ENV in [env]":        "[env]\nENV = \"/x\"\n",
+		"exported function":   "[env]\n\"BASH_FUNC_ls%%\" = \"() { :; }\"\n",
+		"BASH_ENV sub-table":  "[env.BASH_ENV]\nvalue = \"/x\"\n",
+		"dotted key":          "env.BASH_ENV = \"/x\"\n",
+		"inline table":        "env = { GOTOOLCHAIN = \"local\", BASH_ENV = \"/x\" }\n",
+		"after another table": "[env]\nA = \"1\"\n\n[tools]\njq = \"1\"\n\n[env]\nBASH_ENV = \"/x\"\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if len(miseEnvProblems(strings.Split(mutant, "\n"))) == 0 {
+				t.Error("passes a mise.toml carrying " + name)
+			}
+		})
+	}
+	// Keys outside [env] are not [env]'s: a tool named like a variable must
+	// not trip the check.
+	if got := miseEnvProblems(strings.Split("[tools]\nENV = \"1\"\n[env]\nGOTOOLCHAIN = \"local\"\n", "\n")); len(got) != 0 {
+		t.Errorf("flagged %q outside [env]", got)
+	}
+}
+
 // publishActions is every action the publish job uses, in the order its
 // steps use them. The job holds packages: write, id-token: write and
 // attestations: write, so an action it gains is a change to review here,
