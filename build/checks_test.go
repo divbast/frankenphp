@@ -8,6 +8,7 @@
 package build
 
 import (
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"maps"
@@ -240,6 +241,30 @@ func TestPinnedVersions(t *testing.T) {
 	}
 }
 
+// dropCacheEntries deletes the named artifacts from the spc cache a test
+// case runs against.
+func dropCacheEntries(names ...string) func(*testing.T, map[string]string) {
+	return func(t *testing.T, env map[string]string) {
+		t.Helper()
+
+		var cache map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(read(t, env["SPC_CACHE"])), &cache); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range names {
+			if _, ok := cache[name]; !ok {
+				t.Fatalf("the test cache has no %s to drop", name)
+			}
+			delete(cache, name)
+		}
+		out, err := json.MarshalIndent(cache, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		write(t, env["SPC_CACHE"], string(out)+"\n")
+	}
+}
+
 func TestPinnedLibaom(t *testing.T) {
 	t.Parallel()
 
@@ -250,6 +275,26 @@ func TestPinnedLibaom(t *testing.T) {
 			name: "absent",
 			app:  "baikal",
 			say:  "no libaom",
+		},
+		{
+			// An spc that renamed its libaom package, or stopped
+			// downloading it by that name, would ignore the custom-git
+			// line while libavif still needs the codec: no libaom here
+			// is then no evidence, not a pass.
+			name:   "libavif-without-libaom",
+			mutate: dropCacheEntries("libaom"),
+			want:   []string{"lists libavif, which needs libaom, but has no libaom entry"},
+		},
+		{
+			// The same, with libavif gone too and the clone of aomedia's
+			// repository under another name.
+			name: "aomedia-source-under-another-name",
+			mutate: func(t *testing.T, env map[string]string) {
+				t.Helper()
+				dropCacheEntries("libavif")(t, env)
+				write(t, env["SPC_CACHE"], strings.Replace(read(t, env["SPC_CACHE"]), `"libaom": {`, `"aom": {`, 1))
+			},
+			want: []string{"lists a source from aomedia.googlesource.com, where libaom comes from, but has no libaom entry"},
 		},
 		{
 			// What spc fetches when it ignored the custom-git line: the
