@@ -126,10 +126,17 @@ func TestBuildAppTakesOnlyAFineGrainedOrCIToken(t *testing.T) {
 				t.Errorf("the engine was given the token as an argument:\n%s", called)
 			}
 			// The recipe the records stage writes down, hashed as
-			// build.yml hashes it
+			// build.yml hashes it, and passed once: of two, the last
+			// would win
 			recipe := sha256.Sum256(slices.Concat(readFile(t, root, "Containerfile"), readFile(t, root, "apps", "librespeed.env")))
-			if want := "RECIPE_SHA256=" + hex.EncodeToString(recipe[:]); !slices.Contains(args, want) {
-				t.Errorf("the engine ran with %q, want it to pass %s, the sha256 of the Containerfile and apps/librespeed.env", args, want)
+			var recipes []string
+			for _, arg := range args {
+				if strings.HasPrefix(arg, "RECIPE_SHA256=") {
+					recipes = append(recipes, arg)
+				}
+			}
+			if want := "RECIPE_SHA256=" + hex.EncodeToString(recipe[:]); !slices.Equal(recipes, []string{want}) {
+				t.Errorf("the engine was passed %q, want only %s, the sha256 of the Containerfile and apps/librespeed.env", recipes, want)
 			}
 		})
 	}

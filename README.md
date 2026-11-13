@@ -171,7 +171,7 @@ rendered `craft.yml` the flags spc builds with. `recipe` moves with any
 edit to the `Containerfile` or the app's file, a comment among them, so
 any change to the pins, the build or the app's inputs moves the manifest,
 while one to a check under `build/`, the workflows or the documentation
-does not.
+leaves the recipe as it was.
 The build passes it as `RECIPE_SHA256`, which only the stage that writes
 the records declares, so a new recipe never rebuilds the binary.
 
@@ -191,8 +191,10 @@ or whose records are for another app or architecture.
 - **Every merge to main** builds both architectures from scratch, and
   publishes them only if either architecture's manifest differs from the
   published one. A merge that changes only a check under `build/`, a
-  workflow or the documentation moves no tag, and asks no app to move its
-  digest.
+  workflow or the documentation changes nothing the binary is built
+  from, so it publishes, and asks every app to move its digest, only if
+  the Go toolchain or a library spc resolves at build time has moved since
+  the published build.
 - **Every day at 12:13 UTC** both are rebuilt from scratch, and published
   only if either architecture's manifest differs from the published one,
   whether main is still the published commit or has moved past it.

@@ -135,8 +135,9 @@ const (
 )
 
 // TestRecipeHashCoversBothFiles checks that the build workflow's build
-// step hashes the recipe with recipeLine and passes it with recipeArg, and
-// runs recipeLine for each app, checking that it gives the sha256 of the
+// step hashes the recipe with recipeLine and passes it with recipeArg, on
+// the one line of the step that names RECIPE_SHA256, and runs recipeLine
+// for each app, checking that it gives the sha256 of the
 // Containerfile followed by apps/<app>.env: an edit to either is then a
 // content change.
 func TestRecipeHashCoversBothFiles(t *testing.T) {
@@ -149,8 +150,16 @@ func TestRecipeHashCoversBothFiles(t *testing.T) {
 	if !hasLine(steps[at], recipeLine) {
 		t.Errorf("the build step does not hash the recipe as %s", recipeLine)
 	}
-	if !mentions(steps[at], recipeArg) {
-		t.Errorf("the build step does not pass the recipe as %s", recipeArg)
+	// Of two --build-arg RECIPE_SHA256, the last wins, so a second would
+	// replace the hash without this line changing.
+	var named []string
+	for _, line := range steps[at] {
+		if strings.Contains(line, "RECIPE_SHA256") {
+			named = append(named, strings.TrimSpace(line))
+		}
+	}
+	if len(named) != 1 || named[0] != recipeArg {
+		t.Errorf("the build step names RECIPE_SHA256 on %q, not once, as %s", named, recipeArg)
 	}
 
 	root := filepath.Join("..", "..")

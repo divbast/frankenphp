@@ -492,10 +492,12 @@ func TestRecords(t *testing.T) {
 	const (
 		cache    = `{"php-src":{"source":{"version":"8.5.12"}}}` + "\n"
 		manifest = `{"schema-version":1}` + "\n"
-		// The Containerfile's own, and what build.yml passes for the
-		// recipe: sha256sum's hash alone, without its file name.
-		spcCommit = "3ba9ffa0593b94202b48d6dde51e489191ecdbf1"
-		builder   = "dunglas/frankenphp:static-builder-gnu@sha256:4dcdd53971ba1f373c3eb90e393dd3944687938c5c03494ab684921594905fc7"
+		// Inputs of the shape the build passes, and none of them the
+		// Containerfile's own values, so that a records.sh writing those
+		// whatever it is given fails. The recipe is sha256sum's hash
+		// alone, without its file name, as build.yml passes it.
+		spcCommit = "0123456789abcdef0123456789abcdef01234567"
+		builder   = "registry.example.invalid/builder:test@sha256:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
 		recipe    = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
 		craft     = "php-version: \"8.5.12\"\nextensions: \"ctype,gd\"\n"
 	)
