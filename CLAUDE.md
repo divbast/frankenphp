@@ -98,9 +98,9 @@ this project's one record of LLM involvement.
   The floating libraries are listed per app in README.md, read from the
   published carriers' `spc-cache.json` on 2026-11-13 (spc `3ba9ffa`), and
   nothing checks that list; regenerate it from a carrier's `/records` when
-  spc's pin or an app's extensions move. The
-  rest are how library fixes arrive, and Trivy cannot see any of them in
-  the binary. The manifest records each input (`go`, `xcaddy` and
+  spc's pin or an app's extensions move. The floating libraries are how
+  library fixes arrive, and Trivy cannot see any of them in the binary.
+  The manifest records each input (`go`, `xcaddy` and
   `libraries`), pinned or chosen, so the daily run rebuilds from scratch
   and publishes when either architecture's manifest moved; and every run
   that can publish builds without the cache, which would otherwise hold
@@ -223,12 +223,12 @@ this project's one record of LLM involvement.
   to that
 - `just build-app <app>` builds one app's carrier as
   `localhost/frankenphp:<app>`. Every build script spc runs can read
-  `GITHUB_TOKEN`, so it takes only a fine-grained token (`github_pat_`)
-  that reads only public repositories, as README.md's "A token for local
-  builds" says, or CI's job token (`ghs_`). divbast/ci's shared
-  `_github-token` recipe, which `build-app` runs first, refuses any other
-  kind, gh's `gho_` included, and nothing falls back on gh's token. The prefix shows the
-  kind, not the scope
+  `GITHUB_TOKEN`, so it takes only a fine-grained token (`github_pat_`) that
+  reads only public repositories, as README.md's "A token for local builds"
+  says, or CI's job token (`ghs_`). divbast/ci's shared `_github-token`
+  recipe, which `build-app` runs first, refuses any other kind, gh's `gho_`
+  included, and nothing falls back on gh's token. The prefix shows the kind,
+  not the scope
 - `just ci` runs every gate. Run it before committing; `just lint` is
   enough for a commit that changes only documentation
 - `go run ./cmd/frankenphp-manifest -oci <archive> -arch <arch>` prints a

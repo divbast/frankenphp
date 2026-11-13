@@ -163,8 +163,9 @@ RUN SPC_SRC=/opt/static-php-cli \
 # What the binary should hold is checked, not built from, so these two are
 # declared only now: an ARG puts its value in the cache key of every step
 # after it, and declared above the build, an edit to either would rebuild
-# the binary to rerun this one check. extensions.sh fails on an empty
-# EXPECTED_EXTENSIONS.
+# the binary to rerun this one check. cmd/frankenphp-buildargs refuses an
+# app file whose EXPECTED_EXTENSIONS is missing or empty before the build
+# starts, and extensions.sh refuses it too.
 ARG EXPECTED_EXTENSIONS
 ARG REQUIRED_GD_FEATURES
 COPY --chmod=0755 build/extensions.sh /tmp/extensions.sh

@@ -107,13 +107,14 @@ The pins do not fix every input. spc chooses these while the build runs:
 
 Of the libraries the two apps build, libaom (LibreSpeed's) comes from the
 tag above instead, and sqlite (both) and bzip2 (LibreSpeed's) from fixed
-URLs in spc's config. bzip2's config also names a `source-mirror`, sourceware's
-directory listing, which spc falls back on only when the primary URL fails;
-the mirror takes the newest `bzip2-*.tar.gz` it lists, so a bzip2 build that
-quietly changed version would mean the primary URL failed. A rebuild of an
-unchanged commit can therefore hold newer code in the floating libraries,
-which is how their fixes arrive. The manifest below records each of these
-inputs, so the daily rebuild publishes when one moves.
+URLs in spc's config. bzip2's config also names a `source-mirror`,
+sourceware's directory listing, which spc falls back on only when the
+primary URL fails; the mirror takes the newest `bzip2-*.tar.gz` it lists,
+so a bzip2 build that quietly changed version would mean the primary URL
+failed. A rebuild of an unchanged commit can therefore hold newer code in
+the floating libraries, which is how their fixes arrive. The manifest
+below records each of these inputs, so the daily rebuild publishes when
+one moves.
 
 These lists were read on 2026-11-13 from the published carriers'
 `spc-cache.json` records and, for bzip2's mirror, spc's config at the
@@ -284,9 +285,9 @@ own gh commands would start using the read-only token.
 fine-grained personal access token, or `ghs_`, the job token Actions
 issues, and refuses any other kind, gh's own `gho_` among them, naming the
 kind it saw without printing the token. The check is divbast/ci's shared
-`_github-token` recipe, which `build-app` runs first. The prefix shows the kind, not the
-token's access. CI's build job passes its own read-only `ghs_` token to the
-build directly, not through `just build-app`.
+`_github-token` recipe, which `build-app` runs first. The prefix shows the
+kind, not the token's access. CI's build job passes its own read-only
+`ghs_` token to the build directly, not through `just build-app`.
 
 ## Licence
 

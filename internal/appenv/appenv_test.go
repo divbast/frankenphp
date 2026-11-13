@@ -104,6 +104,12 @@ func TestParse(t *testing.T) {
 			wantMsg: []string{"test.env: PHP_EXTENSION_LIBS:"},
 		},
 		{
+			name:    "empty-expected",
+			file:    strings.Replace(good, "EXPECTED_EXTENSIONS=core,ctype,gd", "EXPECTED_EXTENSIONS=", 1),
+			wantErr: []error{appenv.ErrEmpty},
+			wantMsg: []string{"test.env:5: EXPECTED_EXTENSIONS:"},
+		},
+		{
 			name:    "empty-file",
 			file:    "",
 			wantErr: []error{appenv.ErrMissing},

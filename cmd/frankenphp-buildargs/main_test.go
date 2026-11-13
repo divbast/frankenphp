@@ -25,6 +25,13 @@ func TestRun(t *testing.T) {
 			"EXPECTED_EXTENSIONS=core,ctype\n" +
 			"REQUIRED_GD_FEATURES=\n" +
 			"PHP_VERSION=8.5.11\n",
+		"noexpect.env": "PHP_EXTENSIONS=ctype\n" +
+			"PHP_EXTENSION_LIBS=watcher\n" +
+			"REQUIRED_GD_FEATURES=\n",
+		"emptyexpect.env": "PHP_EXTENSIONS=ctype\n" +
+			"PHP_EXTENSION_LIBS=watcher\n" +
+			"EXPECTED_EXTENSIONS=\n" +
+			"REQUIRED_GD_FEATURES=\n",
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
@@ -53,6 +60,20 @@ func TestRun(t *testing.T) {
 			args:       []string{"-dir", dir, "pinned"},
 			wantCode:   1,
 			wantStderr: filepath.Join(dir, "pinned.env") + ":5: PHP_VERSION:",
+		},
+		{
+			name:       "expected-missing",
+			args:       []string{"-dir", dir, "noexpect"},
+			wantCode:   1,
+			wantStderr: filepath.Join(dir, "noexpect.env") + ": EXPECTED_EXTENSIONS:",
+		},
+		{
+			// The build declares this input after the long build RUN, so
+			// only this command can refuse an empty one before it starts
+			name:       "expected-empty",
+			args:       []string{"-dir", dir, "emptyexpect"},
+			wantCode:   1,
+			wantStderr: filepath.Join(dir, "emptyexpect.env") + ":3: EXPECTED_EXTENSIONS:",
 		},
 		{
 			name:       "absent",
