@@ -54,35 +54,194 @@ func TestPublishShellPinned(t *testing.T) {
 	}
 }
 
-// publishShell returns every run: block of build.yml's publish job, in
-// order, each under a line naming its step.
+// publishShell returns what bash runs in build.yml's publish job and
+// everything that shapes how it runs: the workflow's top-level keys, its
+// defaults: and the names of its env:, whose one value Renovate moves;
+// the publish job's keys, env: and defaults:; and each step's env: and
+// run: block, in order, under a line naming the step. Any of these can
+// change what a script does without a line of it changing: an env: entry
+// such as BASH_ENV, which bash expands before the script, or PATH, and a
+// defaults: shell.
 func publishShell(t *testing.T) string {
 	t.Helper()
-	job := jobLines(readLines(t, ".github", "workflows", "build.yml"), "publish")
+	workflow := readLines(t, ".github", "workflows", "build.yml")
+	job := jobLines(workflow, "publish")
 	if job == nil {
 		t.Fatal("build.yml has no publish job")
 	}
 	var b strings.Builder
+	section := func(title string, lines []string) {
+		fmt.Fprintf(&b, "## %s\n", title)
+		if len(lines) == 0 {
+			b.WriteString("(none)\n")
+		}
+		for _, line := range lines {
+			b.WriteString(line + "\n")
+		}
+		b.WriteString("\n")
+	}
+	section("workflow keys", mappingKeys(workflow, 0))
+	section("workflow env names", entryNames(t, mapping(t, workflow, 0, "env")))
+	section("workflow defaults", mapping(t, workflow, 0, "defaults"))
+	section("publish job keys", mappingKeys(job[1:], 4))
+	section("publish job env", mapping(t, job[1:], 4, "env"))
+	section("publish job defaults", mapping(t, job[1:], 4, "defaults"))
+
 	for i, step := range stepLines(job) {
 		if err := checkStep(step); err != nil {
 			t.Fatalf("publish step %d (%s): %v. Write it as the other steps are written, or this cannot pin what it runs", i+1, strings.TrimSpace(step[0]), err)
 		}
+		env := stepEnv(step)
 		script, ok := runBlock(step)
-		if !ok {
+		if !ok && len(env) == 0 {
 			continue
 		}
-		name, ok := stepKey(step, "name")
-		if !ok {
+		name, named := stepKey(step, "name")
+		if !named {
 			name = "(no name)"
 		}
-		fmt.Fprintf(&b, "## %s\n%s\n", name, script)
+		fmt.Fprintf(&b, "## %s\n", name)
+		for _, entry := range env {
+			fmt.Fprintf(&b, "env: %s\n", entry)
+		}
+		if ok {
+			fmt.Fprintf(&b, "run:\n%s", script)
+		}
+		b.WriteString("\n")
 	}
 	return b.String()
 }
 
+// mappingKeys returns the keys of the mapping whose entries sit at
+// indent in lines, in order, as written.
+func mappingKeys(lines []string, indentation int) []string {
+	var keys []string
+	for _, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		if trimmedLine == "" || strings.HasPrefix(trimmedLine, "#") || indent(line) != indentation {
+			continue
+		}
+		key, _, _ := strings.Cut(trimmedLine, ":")
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+// mapping returns the entries under the key called name in the mapping
+// at indent in lines, without that indent and the next, and without
+// comments, or nil when there is no such key. It fails t when the key's
+// own line holds a value, such as a flow mapping, which it does not read.
+func mapping(t *testing.T, lines []string, indentation int, name string) []string {
+	t.Helper()
+	var out []string
+	for i, line := range lines {
+		if indent(line) != indentation || strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		value, ok := strings.CutPrefix(strings.TrimSpace(line), name+":")
+		if !ok {
+			continue
+		}
+		if value = strings.TrimSpace(value); value != "" && !strings.HasPrefix(value, "#") {
+			t.Fatalf("build.yml writes %s: as %q, on one line; write it as a block, or this cannot pin it", name, value)
+		}
+		for _, next := range lines[i+1:] {
+			trimmedLine := strings.TrimSpace(next)
+			if trimmedLine == "" || strings.HasPrefix(trimmedLine, "#") {
+				continue
+			}
+			if indent(next) <= indentation {
+				break
+			}
+			out = append(out, strings.TrimPrefix(next, strings.Repeat(" ", indentation+2)))
+		}
+		return out
+	}
+	return nil
+}
+
+// entryNames returns the name of each one-line entry of a mapping as
+// mapping returns it, failing t on any line that is not one.
+func entryNames(t *testing.T, entries []string) []string {
+	t.Helper()
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if !entry.MatchString(e) {
+			t.Fatalf("build.yml's env: holds %q, not a one-line NAME: value", e)
+		}
+		name, _, _ := strings.Cut(e, ":")
+		names = append(names, name)
+	}
+	return names
+}
+
+// stepEnv returns the step's env: entries as written, which checkStep
+// has held to one line each.
+func stepEnv(step []string) []string {
+	keys := indent(step[0]) + 2
+	var out []string
+	in := false
+	for i, line := range step {
+		trimmedLine := strings.TrimSpace(line)
+		if i == 0 {
+			trimmedLine = strings.TrimPrefix(trimmedLine, "- ")
+		}
+		switch {
+		case trimmedLine == "" || strings.HasPrefix(trimmedLine, "#"):
+		case i == 0 || indent(line) == keys:
+			in = trimmedLine == "env:"
+		case in && indent(line) == keys+2:
+			out = append(out, trimmedLine)
+		}
+	}
+	return out
+}
+
+// actionsBash is how Actions runs a step whose shell is bash, and so how
+// runStep runs the behaviour tests.
+const actionsBash = "bash --noprofile --norc -eo pipefail {0}"
+
+// TestPublishShellIsBashWithPipefail checks that the publish job's steps
+// run under actionsBash, which the behaviour tests assume: through a
+// defaults.run.shell of bash, or of actionsBash written out, on the job
+// or, failing that, the workflow. Left unset, Actions runs bash -e {0},
+// with no pipefail, so a failure inside a pipe would not stop a step.
+// checkStep already refuses a step's own shell:.
+func TestPublishShellIsBashWithPipefail(t *testing.T) {
+	t.Parallel()
+	workflow := readLines(t, ".github", "workflows", "build.yml")
+	job := jobLines(workflow, "publish")
+	if job == nil {
+		t.Fatal("build.yml has no publish job")
+	}
+	shell, ok := defaultShell(t, mapping(t, job[1:], 4, "defaults"))
+	if !ok {
+		shell, ok = defaultShell(t, mapping(t, workflow, 0, "defaults"))
+	}
+	switch {
+	case !ok:
+		t.Error("neither the publish job nor the workflow sets defaults.run.shell, so Actions runs bash -e {0}, without pipefail")
+	case shell != "bash" && shell != actionsBash:
+		t.Errorf("the publish job runs its steps under shell %q, not bash, which is %s", shell, actionsBash)
+	}
+}
+
+// defaultShell returns the shell: under run: in a defaults: mapping as
+// mapping returns it, and whether it sets one.
+func defaultShell(t *testing.T, defaults []string) (string, bool) {
+	t.Helper()
+	for _, line := range mapping(t, defaults, 0, "run") {
+		if value, ok := strings.CutPrefix(strings.TrimSpace(line), "shell:"); ok && indent(line) == 0 {
+			return strings.TrimSpace(value), true
+		}
+	}
+	return "", false
+}
+
 // stepKeys are the keys a publish step may set. Any other, shell: or
 // working-directory: among them, could change what a run: block does
-// without a line of it changing.
+// without a line of it changing; env:, which could too, is pinned with
+// the script (publishShell).
 var stepKeys = []string{"name", "id", "if", "uses", "with", "env", "run"}
 
 var (
@@ -421,7 +580,9 @@ func runStep(t *testing.T, script string, env map[string]string) *stepResult {
 	outputs := writeIn(t, dir, "github-output", nil)
 	log := writeIn(t, dir, "stub.log", nil)
 
-	cmd := exec.CommandContext(t.Context(), "/bin/bash", "--noprofile", "--norc", "-eo", "pipefail", file) //nolint:gosec // G204: bash, as Actions runs a step, on a script this test wrote
+	args := strings.Fields(strings.Replace(actionsBash, "{0}", file, 1))
+	cmd := exec.CommandContext(t.Context(), "/bin/bash", args[1:]...) //nolint:gosec // G204: bash, as Actions runs a step, on a script this test wrote
+	cmd.Dir = temp
 	cmd.Env = []string{
 		"PATH=" + stubBin(t) + string(os.PathListSeparator) + systemPath,
 		"HOME=" + dir,

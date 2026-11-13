@@ -158,7 +158,14 @@ this project's one record of LLM involvement.
   of the publish job must equal
   `cmd/frankenphp-manifest/testdata/publish-shell.txt`, because no check
   that reads the shell for writes to `:<app>` survives one written another
-  way. A step written in any YAML form but the plain one the extractor
+  way. So must what shapes how bash runs it: each step's `env:`, the job's
+  keys, `env:` and `defaults:`, and the workflow's keys, `defaults:` and
+  the names of its `env:`, whose `MISE_VERSION` value Renovate moves. An
+  env entry such as `BASH_ENV` runs before any script, and a `PATH` picks
+  every command. `TestPublishShellIsBashWithPipefail` holds the job's
+  effective shell to `bash`, `--noprofile --norc -eo pipefail`, which the
+  behaviour tests run the steps under; left unset, Actions runs
+  `bash -e` without pipefail. A step written in any YAML form but the plain one the extractor
   reads, such as `run: |-`, a flow mapping or a `shell:` key, fails the
   test rather than going unread. A change shows as a diff: read it, and
   only if it is meant run
