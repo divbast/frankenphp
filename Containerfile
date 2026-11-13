@@ -11,8 +11,8 @@ ARG BUILDER_IMAGE=dunglas/frankenphp:static-builder-gnu@sha256:4dcdd53971ba1f373
 # php.net and xcaddy the newest Caddy and plugins, so two builds of one commit
 # could ship a different PHP or Caddy. build/pinned-versions.sh checks the
 # binary agrees. Not every input is pinned: spc still chooses the Go
-# toolchain, xcaddy and most C libraries as it runs, and records.sh writes
-# down which.
+# toolchain and most C libraries as it runs, and records.sh writes down
+# which.
 ARG PHP_VERSION=8.5.12
 ARG CADDY_VERSION=v2.11.9
 ARG CBROTLI_VERSION=v1.0.1
@@ -23,6 +23,16 @@ ARG VULCAIN_VERSION=v1.4.6
 # Renovate follows the branch head by commit. build/pinned-spc.sh checks it
 # ran.
 ARG SPC_COMMIT=3ba9ffa0593b94202b48d6dde51e489191ecdbf1
+# xcaddy, which writes the binary's main module and runs its build. spc
+# would otherwise install it from its master branch on most builds, as the
+# build stage below says. build/pinned-versions.sh checks the xcaddy that
+# ran.
+ARG XCADDY_VERSION=v0.4.7
+# libaom, which LibreSpeed's gd brings in through libavif. spc's own config
+# clones the head of its main branch, which moves most days. An AOM release
+# tag, never a commit: spc clones it with `git clone --branch`.
+# build/pinned-libaom.sh checks what spc cloned.
+ARG LIBAOM_TAG=v3.15.3
 
 FROM ${BUILDER_IMAGE} AS build
 ARG SPC_COMMIT
@@ -52,10 +62,51 @@ RUN set -eux; \
         "echo \"\$1\" >>/go/src/app/dist/spc.calls" \
         "exec php /opt/static-php-cli/bin/spc \"\$@\"" >/go/src/app/dist/spc; \
     chmod 0755 /go/src/app/dist/spc
-# Declared after the spc checkout, which every app shares: RUN sees each ARG
-# as an environment variable, so each would otherwise give that layer a
-# cache key per app. Every RUN below sees them, and the checks read their
-# inputs from them.
+# Every app's, and each declared just before the step that reads it, so
+# that moving one pin reruns only what follows it.
+ARG XCADDY_VERSION
+# spc's go-xcaddy package is the newest Go go.dev lists and an xcaddy. spc
+# unpacks it into PKG_ROOT_PATH whenever that Go is not the one already
+# there, which is most builds, and each time installs xcaddy from its
+# master branch. So unpack it here, into the download cache and package
+# root the craft run reuses, and install XCADDY_VERSION over the xcaddy spc
+# built. The craft run then finds the package unpacked from the same
+# download (its .spc-hash matches) and leaves it alone. spc's master build
+# here must still compile, though nothing runs it. env -C runs spc from
+# dist/, where build-static.sh runs it, without a WORKDIR (see above).
+# PKG_ROOT_PATH is the builder image's, which spc reads too, so every path
+# to the package below follows it. Neither step calls the GitHub API, so
+# neither sees the token.
+RUN set -eux; \
+    : "${PKG_ROOT_PATH:?is unset: spc unpacks go-xcaddy under it, and the builder image sets it}"; \
+    retry() { \
+        for delay in 10 30 90; do "$@" && return 0; sleep "${delay}"; done; \
+        "$@"; \
+    }; \
+    retry env -C /go/src/app/dist \
+        /go/src/app/dist/spc install-pkg go-xcaddy --dl-retry=5; \
+    retry env CGO_ENABLED=0 GOTOOLCHAIN=local \
+        GOROOT="${PKG_ROOT_PATH}/go-xcaddy" \
+        GOBIN="${PKG_ROOT_PATH}/go-xcaddy/bin" \
+        GOPATH="${PKG_ROOT_PATH}/go-xcaddy/go" \
+        "${PKG_ROOT_PATH}/go-xcaddy/bin/go" install \
+        "github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}"
+ARG LIBAOM_TAG
+# spc reads download-options from craft.yml, and build-static.sh copies
+# every line it does not rewrite, so a custom-git line there makes spc clone
+# libaom at LIBAOM_TAG. spc ignores such a line, without a word, when no
+# package it downloads has that name: build/pinned-libaom.sh checks the
+# clone after the build. The checks here catch a sed that matched nothing,
+# and a craft.yml that grew a custom-git line of its own.
+RUN set -eux; \
+    line="  custom-git: [\"libaom:${LIBAOM_TAG}:https://aomedia.googlesource.com/aom\"]"; \
+    sed -i "/^download-options:\$/a\\${line}" /go/src/app/craft.yml; \
+    grep -qxF "${line}" /go/src/app/craft.yml; \
+    test "$(grep -c 'custom-git:' /go/src/app/craft.yml)" -eq 1
+# Declared after the steps every app shares: RUN sees each ARG as an
+# environment variable, so each would otherwise give those layers a cache
+# key per app. Every RUN below sees them, and the checks read their inputs
+# from them.
 ARG PHP_VERSION
 ARG CADDY_VERSION
 ARG CBROTLI_VERSION
@@ -84,10 +135,9 @@ RUN : "${APP:?is empty: pass apps/<app>.env as build arguments, as just build-ap
 # as a secret, which no layer, history entry or cache key ever holds, as they
 # would an ARG or ENV. It is in the environment of this whole RUN, though,
 # and spc passes its environment to everything it starts, so every library's
-# build scripts, the xcaddy install and the Go build can read it. CI passes
-# its job's read-only token; a local build takes a fine-grained token with
-# Public repositories (read-only) access; see README.md, "A token for local
-# builds".
+# build scripts and the Go build can read it. CI passes its job's read-only
+# token; a local build takes a fine-grained token with Public repositories
+# (read-only) access; see README.md, "A token for local builds".
 # Without the secret GITHUB_TOKEN is empty, and spc then sends no token at
 # all.
 RUN --mount=type=secret,id=github_token,env=GITHUB_TOKEN \
@@ -101,7 +151,12 @@ RUN cp "$(ls /go/src/app/dist/frankenphp-linux-*)" /go/src/app/dist/frankenphp
 # Each check is copied in after the build, so that changing one never
 # rebuilds the binary.
 COPY --chmod=0755 build/pinned-versions.sh /tmp/pinned-versions.sh
-RUN FRANKENPHP_BIN=/go/src/app/dist/frankenphp /tmp/pinned-versions.sh
+RUN FRANKENPHP_BIN=/go/src/app/dist/frankenphp \
+    GO_BIN="${PKG_ROOT_PATH}/go-xcaddy/bin/go" \
+    XCADDY_BIN="${PKG_ROOT_PATH}/go-xcaddy/bin/xcaddy" \
+    /tmp/pinned-versions.sh
+COPY --chmod=0755 build/pinned-libaom.sh /tmp/pinned-libaom.sh
+RUN SPC_CACHE=/go/src/app/dist/downloads/.cache.json /tmp/pinned-libaom.sh
 COPY --chmod=0755 build/pinned-spc.sh /tmp/pinned-spc.sh
 RUN SPC_SRC=/opt/static-php-cli \
     SPC_WRAPPER=/go/src/app/dist/spc \
@@ -119,8 +174,8 @@ COPY --chmod=0755 build/records.sh /tmp/records.sh
 RUN FRANKENPHP_BIN=/go/src/app/dist/frankenphp \
     SPC_CACHE=/go/src/app/dist/downloads/.cache.json \
     BUILD_MANIFEST=/go/src/app/dist/buildroot/build-manifest.json \
-    GO_BIN=/opt/spc-pkgroot/go-xcaddy/bin/go \
-    XCADDY_BIN=/opt/spc-pkgroot/go-xcaddy/bin/xcaddy \
+    GO_BIN="${PKG_ROOT_PATH}/go-xcaddy/bin/go" \
+    XCADDY_BIN="${PKG_ROOT_PATH}/go-xcaddy/bin/xcaddy" \
     RECORDS=/records \
     /tmp/records.sh
 

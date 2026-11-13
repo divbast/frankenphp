@@ -43,17 +43,35 @@ this project's one record of LLM involvement.
 
 - **The pins live in the Containerfile, once, for every app.** The builder
   image by digest, which also brings the FrankenPHP source, `PHP_VERSION`,
-  `CADDY_VERSION`, the three plugin ARGs and `SPC_COMMIT`. Left unset,
-  `build-static.sh` takes the newest PHP 8.5 from php.net, xcaddy the
-  newest Caddy and plugins, and spc arrives as an unchecked nightly. The
-  pins fix those and not every input: spc still chooses some while the
-  build runs (below), so two builds of one commit can still differ.
-  `build/pinned-versions.sh` fails the build if the binary's own build info
-  disagrees with a pin, because Go's minimum version selection lifts a
-  module above its pin without a word, and `build/pinned-spc.sh` fails it if
-  anything but the pinned spc ran. Renovate moves the builder, Caddy and the
-  plugins as one `frankenphp` group, and spc in a pull request of its own,
-  at most once a day. PHP stays at 8.5.12 or later
+  `CADDY_VERSION`, the three plugin ARGs, `XCADDY_VERSION`, `SPC_COMMIT`
+  and `LIBAOM_TAG`. Left unset, `build-static.sh` takes the newest PHP 8.5
+  from php.net, xcaddy the newest Caddy and plugins, and spc arrives as an
+  unchecked nightly; spc installs xcaddy from its master branch on most
+  builds, and clones libaom at the head of its main branch. The pins fix
+  those and not every input: spc still chooses some while the build runs
+  (below), so two builds of one commit can still differ.
+  `build/pinned-versions.sh` fails the build if the binary's own build info,
+  or the xcaddy that built it, disagrees with a pin, because Go's minimum
+  version selection lifts a module above its pin without a word, and reads
+  a replaced module as its replacement; `build/pinned-libaom.sh` fails it
+  if spc cloned libaom at anything but `LIBAOM_TAG`, and
+  `build/pinned-spc.sh` if anything but the pinned spc ran. Renovate moves
+  the builder, Caddy and the plugins as one `frankenphp` group, spc in a
+  pull request of its own, at most once a day, and xcaddy and libaom each
+  in one of their own. PHP stays at 8.5.12 or later
+- **xcaddy and libaom hold only because of how the Containerfile sets them
+  up, and nothing in spc errs when they don't.** spc unpacks its go-xcaddy
+  package, and builds xcaddy from master into it, whenever the Go it
+  fetched is not the one already unpacked; the Containerfile unpacks it
+  first and installs `XCADDY_VERSION` over spc's xcaddy, and the craft run
+  leaves the package alone because its `.spc-hash` matches. The libaom tag
+  reaches spc as a `custom-git` line added to `craft.yml`, which spc
+  ignores without a word if the name in it is not a package it downloads.
+  `custom-git` takes a tag or a branch, never a commit, since spc clones it
+  with `git clone --branch`. The go-xcaddy step writes spc's download cache
+  before the craft runs, holding go-xcaddy alone, so a check that reads the
+  cache first proves the craft wrote it: every craft fetches `php-src`, and
+  `install-pkg` never does
 - **An app's file never holds a pin.** `apps/<app>.env` sets exactly
   `PHP_EXTENSIONS`, `PHP_EXTENSION_LIBS`, `EXPECTED_EXTENSIONS` and
   `REQUIRED_GD_FEATURES`; `internal/appenv` refuses anything else, and
@@ -71,20 +89,26 @@ this project's one record of LLM involvement.
   what pin down the result
 - **Some inputs resolve at build time.** The spc commit fixes how the
   binary is built, not every input to it. spc takes the Go toolchain as the
-  newest release go.dev lists; xcaddy, which writes the binary's main
-  module and runs its build, from its `master` branch's head when that Go
-  is newer than the builder image's, and otherwise the builder image's own
-  xcaddy; libaom from its main branch's head; openssl, zlib and most other
-  libraries from the newest GitHub release or tag that matches; and
-  libiconv from GNU's file listing. Of the libraries the apps build, only
-  sqlite and bzip2 come from fixed URLs in spc's config. The rest are how
-  library fixes arrive, and Trivy cannot see any of them in the binary.
-  The manifest records each of these inputs (`go`, `xcaddy` and
-  `libraries`), whichever way each was chosen, so the daily run
+  newest release go.dev lists; openssl, zlib and most other libraries from
+  the newest GitHub release or tag that matches; and libiconv from GNU's
+  file listing. Of the libraries the apps build, libaom comes from
+  `LIBAOM_TAG`, and sqlite and bzip2 from fixed URLs in spc's config. The
+  rest are how library fixes arrive, and Trivy cannot see any of them in
+  the binary. The manifest records each input (`go`, `xcaddy` and
+  `libraries`), pinned or chosen, so the daily run
   rebuilds from scratch and, when main is still the published commit,
   publishes when either architecture's manifest moved; and every run that
   can publish builds without the cache, which would otherwise hold what an
   earlier run fetched
+- **sqlite stays at 3.45.2, the release spc's config names.** Every
+  `sqlite-autoconf` archive since 3.49 configures with autosetup, which
+  refuses the `--with-pic` and `--enable-pic` spc passes to it, so a
+  `custom-url` line for a newer one fails the build at sqlite's configure.
+  Each advisory sqlite.org lists as fixed since 3.45.2
+  (https://www.sqlite.org/cves.html) needs an attacker who can run SQL of
+  their own, write the database file, or pass out-of-range arguments to one
+  of sqlite's C functions. It moves when spc's config does, or once spc
+  configures sqlite without those flags
 - **Only the daily rebuild of the published commit compares manifests.** A
   merge's run that compared, racing the daily run on the same commit, or a
   re-run of a publish job with its old carriers, would publish libraries its

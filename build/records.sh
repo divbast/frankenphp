@@ -16,10 +16,9 @@
 #
 # spc resolves several library sources to their newest release at build
 # time, so its two files are the only record of which C libraries the
-# binary holds. It installs xcaddy from its master branch whenever it
-# fetches a newer Go than the builder's, and otherwise keeps the builder's
-# own, so xcaddy.txt is the only record of which commit built it. A record
-# set is whole or absent: nothing is written unless everything can be.
+# binary holds. xcaddy.txt records the xcaddy that built it, which
+# pinned-versions.sh has already held to XCADDY_VERSION. A record set is
+# whole or absent: nothing is written unless everything can be.
 set -euo pipefail
 export LC_ALL=C
 
@@ -27,8 +26,8 @@ BIN="${FRANKENPHP_BIN:-dist/frankenphp}"
 CACHE="${SPC_CACHE:-dist/downloads/.cache.json}"
 MANIFEST="${BUILD_MANIFEST:-dist/buildroot/build-manifest.json}"
 # spc's go-xcaddy package, in the builder's PKG_ROOT_PATH
-GO="${GO_BIN:-/opt/spc-pkgroot/go-xcaddy/bin/go}"
-XCADDY="${XCADDY_BIN:-/opt/spc-pkgroot/go-xcaddy/bin/xcaddy}"
+GO="${GO_BIN:-${PKG_ROOT_PATH:-/opt/spc-pkgroot}/go-xcaddy/bin/go}"
+XCADDY="${XCADDY_BIN:-${PKG_ROOT_PATH:-/opt/spc-pkgroot}/go-xcaddy/bin/xcaddy}"
 OUT="${RECORDS:-/records}"
 FAILED=0
 
@@ -43,8 +42,14 @@ fi
 if [[ ! -x "${BIN}" ]]; then
 	fail "FRANKENPHP_BIN names no executable binary: ${BIN}"
 fi
+# The go-xcaddy step writes a cache before the craft runs, holding
+# go-xcaddy alone, so a cache being there proves nothing: only one that
+# lists php-src, which every craft fetches and install-pkg never does, is
+# the craft's. jq says above the ERROR line when it cannot read the file.
 if [[ ! -s "${CACHE}" ]]; then
 	fail "spc left no download cache at ${CACHE}."
+elif ! jq -e 'type == "object" and has("php-src")' "${CACHE}" >/dev/null; then
+	fail "${CACHE} has no php-src, which every spc craft fetches: the craft did not write this download cache."
 fi
 if [[ ! -s "${MANIFEST}" ]]; then
 	fail "spc left no build manifest at ${MANIFEST}."

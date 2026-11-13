@@ -1,0 +1,22 @@
+{
+    "go-xcaddy": {
+        "source": null,
+        "binary": {
+            "linux-aarch64": {
+                "lock_type": "binary",
+                "cache_type": "archive",
+                "filename": "go1.27.4.linux-arm64.tar.gz",
+                "extract": "{pkg_root_path}/go-xcaddy",
+                "hash": "80c0deda6fbec5976137edafc02a82366e9ceda8",
+                "time": 1794542163,
+                "version": "go1.27.4",
+                "config": {
+                    "url": "https://go.dev/dl/go1.27.4.linux-arm64.tar.gz",
+                    "version": "go1.27.4"
+                },
+                "downloader": null,
+                "platform": "linux-aarch64"
+            }
+        }
+    }
+}

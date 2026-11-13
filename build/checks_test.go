@@ -22,15 +22,20 @@ import (
 	"github.com/divbast/frankenphp/internal/appenv"
 )
 
-// The versions the testdata binary reports, as the Containerfile's ARGs pin
-// them.
+// The versions the testdata binary and xcaddy report, as the Containerfile's
+// ARGs pin them.
 var pins = map[string]string{
 	"PHP_VERSION":     "8.5.12",
 	"CADDY_VERSION":   "v2.11.9",
 	"CBROTLI_VERSION": "v1.0.1",
 	"MERCURE_VERSION": "v1.1.6",
 	"VULCAIN_VERSION": "v1.4.6",
+	"XCADDY_VERSION":  "v0.4.7",
 }
+
+// The AOM release the Containerfile pins libaom to, as testdata's
+// LibreSpeed download cache records it.
+const libaomTag = "v3.15.3"
 
 // testCase is one run of a script.
 type testCase struct {
@@ -47,7 +52,28 @@ type testCase struct {
 	// want holds one string per ERROR line the script must print, each
 	// naming the ARG, extension or file at fault. Empty means it passes.
 	want []string
+	// say, when set, is what a passing script's stdout must hold.
+	say string
+	// hints names the advice a failing pinned-versions.sh must follow its
+	// ERROR lines with, as keys of pinnedHints; it must give no other.
+	hints []string
 }
+
+// pinnedHints maps each kind of pinned-versions.sh failure to a phrase only
+// its advice holds. Each kind needs different advice: a lifted module's pin
+// is raised, a replaced module's never is, and neither is xcaddy's when spc
+// built its own.
+var pinnedHints = map[string]string{
+	"php":      "craft.yml's php-version",
+	"lifted":   "minimum version selection",
+	"missing":  "checks nothing",
+	"replaced": "remove the replace",
+	"xcaddy":   "don't raise XCADDY_VERSION",
+}
+
+// precraftCache is the download cache the go-xcaddy step leaves before the
+// craft runs, captured from that step: install-pkg writes only go-xcaddy.
+const precraftCache = "testdata/precraft-spc-cache.json"
 
 // edit rewrites one canned answer. from must match exactly once, so that a
 // fixture which drifts fails the test rather than passing it for the wrong
@@ -71,31 +97,95 @@ func TestPinnedVersions(t *testing.T) {
 			name:  "php-mismatch",
 			edits: []edit{{"version", `PHP 8\.5\.12`, "PHP 8.5.11"}},
 			want:  []string{"PHP_VERSION"},
+			hints: []string{"php"},
 		},
 		{
 			name:  "php-unreported",
 			edits: []edit{{"version", ` PHP 8\.5\.12`, ""}},
 			want:  []string{"PHP_VERSION"},
+			hints: []string{"php"},
 		},
 		{
 			name:  "caddy-lifted",
 			edits: []edit{{"build-info", `(?m)^(dep\tgithub\.com/caddyserver/caddy/v2\t)v2\.11\.9\t`, "${1}v2.11.10\t"}},
 			want:  []string{"CADDY_VERSION"},
+			hints: []string{"lifted"},
 		},
 		{
 			name:  "cbrotli-lifted",
 			edits: []edit{{"build-info", `(?m)^(dep\tgithub\.com/dunglas/caddy-cbrotli\t)v1\.0\.1\t`, "${1}v1.0.2\t"}},
 			want:  []string{"CBROTLI_VERSION"},
+			hints: []string{"lifted"},
 		},
 		{
 			name:  "mercure-lifted",
 			edits: []edit{{"build-info", `(?m)^(dep\tgithub\.com/dunglas/mercure/caddy\t)v1\.1\.6\t`, "${1}v1.1.7\t"}},
 			want:  []string{"MERCURE_VERSION"},
+			hints: []string{"lifted"},
 		},
 		{
 			name:  "plugin-missing",
 			edits: []edit{{"build-info", `(?m)^dep\tgithub\.com/dunglas/vulcain/caddy\t.*\n`, ""}},
 			want:  []string{"VULCAIN_VERSION"},
+			hints: []string{"missing"},
+		},
+		{
+			// A replace line follows the module it replaces, and the
+			// replacement is what the binary holds.
+			name:  "caddy-replaced",
+			edits: []edit{{"build-info", `(?m)^(dep\tgithub\.com/caddyserver/caddy/v2\t.*\n)`, "${1}=>\tgithub.com/example/caddy/v2\tv2.11.8\th1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=\n"}},
+			want:  []string{"CADDY_VERSION"},
+			hints: []string{"replaced"},
+		},
+		{
+			name:  "plugin-replaced-locally",
+			edits: []edit{{"build-info", `(?m)^(dep\tgithub\.com/dunglas/mercure/caddy\t.*\n)`, "${1}=>\t/src/mercure/caddy\t(devel)\t\n"}},
+			want:  []string{"MERCURE_VERSION"},
+			hints: []string{"replaced"},
+		},
+		{
+			// A fork that calls itself the pinned version is still not the
+			// module the pin names.
+			name:  "replaced-at-the-pin",
+			edits: []edit{{"build-info", `(?m)^(dep\tgithub\.com/dunglas/vulcain/caddy\t.*\n)`, "${1}=>\tgithub.com/example/vulcain/caddy\tv1.4.6\th1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=\n"}},
+			want:  []string{"VULCAIN_VERSION"},
+			hints: []string{"replaced"},
+		},
+		{
+			name:  "xcaddy-moved",
+			edits: []edit{{"xcaddy", `(?m)^(\tmod\tgithub\.com/caddyserver/xcaddy\t)v0\.4\.7\t`, "${1}v0.4.8-0.20261101000000-0123456789ab\t"}},
+			want:  []string{"XCADDY_VERSION"},
+			hints: []string{"xcaddy"},
+		},
+		{
+			// Each failure keeps its own advice when several come at once.
+			name: "lifted-and-xcaddy-moved",
+			edits: []edit{
+				{"build-info", `(?m)^(dep\tgithub\.com/caddyserver/caddy/v2\t)v2\.11\.9\t`, "${1}v2.11.10\t"},
+				{"xcaddy", `(?m)^(\tmod\tgithub\.com/caddyserver/xcaddy\t)v0\.4\.7\t`, "${1}v0.4.8-0.20261101000000-0123456789ab\t"},
+			},
+			want:  []string{"CADDY_VERSION", "XCADDY_VERSION"},
+			hints: []string{"lifted", "xcaddy"},
+		},
+		{
+			name:  "xcaddy-devel",
+			edits: []edit{{"xcaddy", `(?m)^(\tmod\tgithub\.com/caddyserver/xcaddy\t)v0\.4\.7\t.*$`, "${1}(devel)\t"}},
+			want:  []string{"XCADDY_VERSION"},
+			hints: []string{"xcaddy"},
+		},
+		{
+			name:  "xcaddy-unreported",
+			edits: []edit{{"xcaddy", `(?m)^\tmod\tgithub\.com/caddyserver/xcaddy\t.*\n`, ""}},
+			want:  []string{"XCADDY_VERSION"},
+			hints: []string{"xcaddy"},
+		},
+		{
+			name: "go-fails",
+			mutate: func(t *testing.T, env map[string]string) {
+				t.Helper()
+				remove(t, filepath.Join(env["STUB_ANSWERS"], "xcaddy"))
+			},
+			want: []string{"XCADDY_BIN"},
 		},
 		{
 			name:  "pin-unset",
@@ -103,10 +193,29 @@ func TestPinnedVersions(t *testing.T) {
 			want:  []string{"CADDY_VERSION is empty"},
 		},
 		{
+			name:  "xcaddy-pin-unset",
+			unset: []string{"XCADDY_VERSION"},
+			want:  []string{"XCADDY_VERSION is empty"},
+		},
+		{
 			name: "no-binary",
 			set:  map[string]string{"FRANKENPHP_BIN": "/nonexistent/frankenphp"},
 			want: []string{"FRANKENPHP_BIN"},
 		},
+		{
+			name: "no-go",
+			set:  map[string]string{"GO_BIN": "/nonexistent/go"},
+			want: []string{"GO_BIN"},
+		},
+		{
+			name: "no-xcaddy",
+			set:  map[string]string{"XCADDY_BIN": "/nonexistent/xcaddy"},
+			want: []string{"XCADDY_BIN"},
+		},
+	}
+	goStub, err := filepath.Abs(filepath.Join("testdata", "go.sh"))
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	for _, tt := range tests {
@@ -115,7 +224,131 @@ func TestPinnedVersions(t *testing.T) {
 
 			env := stub(t, tt.app, tt.edits)
 			maps.Copy(env, pins)
-			check(t, run(t, "pinned-versions", tt.inputs(t, env)), tt.want)
+			// spc's go-xcaddy package: the go that reads xcaddy's build
+			// info, and xcaddy, which only that go looks at
+			env["GO_BIN"] = goStub
+			env["XCADDY_BIN"] = filepath.Join(t.TempDir(), "xcaddy")
+			write(t, env["XCADDY_BIN"], "\x7fELF not really")
+			r := run(t, "pinned-versions", tt.inputs(t, env))
+			check(t, r, tt.want)
+			for kind, phrase := range pinnedHints {
+				if want, got := slices.Contains(tt.hints, kind), strings.Contains(r.stderr, phrase); want != got {
+					t.Errorf("advice for a %s pin (%q): given %t, want %t; stderr:\n%s", kind, phrase, got, want, r.stderr)
+				}
+			}
+		})
+	}
+}
+
+func TestPinnedLibaom(t *testing.T) {
+	t.Parallel()
+
+	tests := []testCase{
+		{name: "ok", say: "dev-" + libaomTag + "+"},
+		{
+			// Baikal builds no gd, so nothing brings libaom.
+			name: "absent",
+			app:  "baikal",
+			say:  "no libaom",
+		},
+		{
+			// What spc fetches when it ignored the custom-git line: the
+			// branch libaom's own config names.
+			name:  "branch-head",
+			edits: []edit{{"spc-cache.json", `"version": "dev-v3\.15\.3\+b141d9c"`, `"version": "dev-main+8a10385"`}},
+			want:  []string{"dev-main+8a10385"},
+		},
+		{
+			name:  "other-tag",
+			edits: []edit{{"spc-cache.json", `"version": "dev-v3\.15\.3\+b141d9c"`, `"version": "dev-v3.15.2+af3dc9a"`}},
+			want:  []string{"dev-v3.15.2+af3dc9a"},
+		},
+		{
+			// The tag ends at the +: v3.15.30 is not v3.15.3.
+			name:  "longer-tag",
+			edits: []edit{{"spc-cache.json", `"version": "dev-v3\.15\.3\+b141d9c"`, `"version": "dev-v3.15.30+0123456"`}},
+			want:  []string{"dev-v3.15.30+0123456"},
+		},
+		{
+			name:  "unversioned",
+			edits: []edit{{"spc-cache.json", `"version": "dev-v3\.15\.3\+b141d9c"`, `"version": null`}},
+			want:  []string{"no version"},
+		},
+		{
+			// What the go-xcaddy step leaves when the craft never ran, or
+			// never wrote its cache: no app built, so no libaom to pass on.
+			name: "not-the-crafts-cache",
+			mutate: func(t *testing.T, env map[string]string) {
+				t.Helper()
+				write(t, env["SPC_CACHE"], read(t, precraftCache))
+			},
+			want: []string{"php-src"},
+		},
+		{
+			name: "empty-object",
+			mutate: func(t *testing.T, env map[string]string) {
+				t.Helper()
+				write(t, env["SPC_CACHE"], "{}\n")
+			},
+			want: []string{"php-src"},
+		},
+		{
+			name: "libaom-not-an-object",
+			mutate: func(t *testing.T, env map[string]string) {
+				t.Helper()
+				write(t, env["SPC_CACHE"], `{"php-src": {"source": {"version": "8.5.12"}}, "libaom": "dev-v3.15.3+b141d9c"}`+"\n")
+			},
+			want: []string{"entry for libaom"},
+		},
+		{
+			name: "not-json",
+			mutate: func(t *testing.T, env map[string]string) {
+				t.Helper()
+				write(t, env["SPC_CACHE"], "libaom: dev-v3.15.3+b141d9c\n")
+			},
+			want: []string{"not spc's download cache"},
+		},
+		{
+			name: "not-an-object",
+			mutate: func(t *testing.T, env map[string]string) {
+				t.Helper()
+				write(t, env["SPC_CACHE"], `["libaom"]`+"\n")
+			},
+			want: []string{"not spc's download cache"},
+		},
+		{
+			name: "no-cache",
+			set:  map[string]string{"SPC_CACHE": "/nonexistent/.cache.json"},
+			want: []string{"SPC_CACHE"},
+		},
+		{
+			name:  "tag-unset",
+			unset: []string{"LIBAOM_TAG"},
+			want:  []string{"LIBAOM_TAG is empty"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// testdata/<app>/spc-cache.json, captured from that app's
+			// build, as spc leaves it in dist/downloads
+			env := stub(t, tt.app, tt.edits)
+			env["SPC_CACHE"] = filepath.Join(env["STUB_ANSWERS"], "spc-cache.json")
+			env["LIBAOM_TAG"] = libaomTag
+			r := run(t, "pinned-libaom", tt.inputs(t, env))
+			check(t, r, tt.want)
+			// A wrong libaom is fixed in the Containerfile's pin or its
+			// custom-git line, so each such complaint names LIBAOM_TAG.
+			for _, line := range errorLines(r.stderr) {
+				if strings.Contains(line, "dev-") && !strings.Contains(line, "LIBAOM_TAG") {
+					t.Errorf("ERROR line does not name LIBAOM_TAG: %q", line)
+				}
+			}
+			if tt.say != "" && !strings.Contains(r.stdout, tt.say) {
+				t.Errorf("stdout does not say %q:\n%s", tt.say, r.stdout)
+			}
 		})
 	}
 }
@@ -269,6 +502,30 @@ func TestRecords(t *testing.T) {
 				remove(t, env["SPC_CACHE"])
 			},
 			want: []string{"download cache"},
+		},
+		{
+			name: "download-cache-not-the-crafts",
+			mutate: func(t *testing.T, env map[string]string) {
+				t.Helper()
+				write(t, env["SPC_CACHE"], read(t, precraftCache))
+			},
+			want: []string{"php-src"},
+		},
+		{
+			name: "download-cache-empty-object",
+			mutate: func(t *testing.T, env map[string]string) {
+				t.Helper()
+				write(t, env["SPC_CACHE"], "{}\n")
+			},
+			want: []string{"php-src"},
+		},
+		{
+			name: "download-cache-not-json",
+			mutate: func(t *testing.T, env map[string]string) {
+				t.Helper()
+				write(t, env["SPC_CACHE"], "php-src\n")
+			},
+			want: []string{"php-src"},
 		},
 		{
 			name: "no-build-manifest",
