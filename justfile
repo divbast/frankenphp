@@ -22,45 +22,36 @@ setup: ci-checkout
 # Fetch divbast/ci at the commit the workflows pin, into .ci, and nothing else
 ci-checkout:
     #!/usr/bin/env bash
-    # Not through the mise exec shell, which would first install every tool
-    # in mise.toml that is missing
+    # Not through the mise exec shell, which would first install what is missing
     set -euo pipefail
-    # The one release commit every workflow calls divbast/ci at
+    # The one commit the workflows call divbast/ci at, spelt in any case
     uses="^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*[\"']?divbast/ci/[^@[:space:]\"']+@[^[:space:]\"'#]+"
-    sha=$(grep -hoE "${uses}" .github/workflows/*.y*ml | sed 's/.*@//' | sort -u | paste -sd ' ' - || true)
+    sha=$(grep -hoiE "${uses}" .github/workflows/*.y*ml | sed 's/.*@//' | sort -u | paste -sd ' ' - || true)
     if [[ ! "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
         echo "ci-checkout: the workflows must call divbast/ci at one full commit SHA, not at: ${sha:-none}" >&2
         exit 1
-    fi
-    have=$(git -C .ci rev-parse HEAD 2>/dev/null || true)
-    if [[ "${have}" == "${sha}" ]]; then
+    elif [[ "$(git -C .ci rev-parse HEAD 2>/dev/null || true)" == "${sha}" ]]; then
         echo "ci-checkout: .ci is already at ${sha}"
-    else
-        git init -q .ci
-        git -C .ci fetch -q --depth 1 https://github.com/divbast/ci "${sha}"
-        git -C .ci checkout -q FETCH_HEAD
+        exit 0
     fi
+    changed=$([[ ! -e .ci/.git ]] || git -C .ci status --porcelain)
+    if [[ -n "${changed}" ]]; then
+        printf 'ci-checkout: moving .ci to %s would carry its own changes across, or stop on them; save or discard them first:\n%s\n' "${sha}" "${changed}" >&2
+        exit 1
+    fi
+    git init -q .ci
+    git -C .ci fetch -q --depth 1 https://github.com/divbast/ci "${sha}"
+    git -C .ci checkout -q FETCH_HEAD && rm -rf .ci/bin
 
 # Build one app's carrier image, localhost/frankenphp:APP, from apps/APP.env
 build-app APP:
     #!/usr/bin/env bash
     # One script, not a shell per line, so that the loop below can run
     set -euo pipefail
-    # Every build script spc runs can read the token, so it must be a
-    # fine-grained token with Public repositories (read-only) access (see
-    # README), or CI's job token. Its prefix shows the kind, never the scope.
-    case "${GITHUB_TOKEN-}" in
-    github_pat_* | ghs_*) kind= ;;
-    "") kind=empty ;;
-    gho_*) kind="a gh/OAuth token (gho_)" ;;
-    ghp_*) kind="a classic personal access token (ghp_)" ;;
-    ghu_*) kind="a GitHub App user token (ghu_)" ;;
-    *) kind="a token of no kind this knows" ;;
-    esac
-    if [[ -n "${kind}" ]]; then
-        echo "build-app: GITHUB_TOKEN is ${kind}, not a fine-grained token (github_pat_) or CI's job token (ghs_); see README.md, \"A token for local builds\"" >&2
-        exit 1
-    fi
+    # Every build script spc runs can read the token, so ci's shared guard
+    # refuses all but a fine-grained token (README, "A token for local
+    # builds") or CI's job token
+    {{ just_executable() }} _github-token
     # frankenphp-buildargs refuses anything but the four inputs, and prints
     # one build argument per line: a value may hold spaces, never a newline.
     out=$(mise exec -- go run ./cmd/frankenphp-buildargs {{ quote(APP) }})
@@ -80,7 +71,7 @@ build-app APP:
 # Every lint gate and the Go tests: CI runs this recipe, so the tests gate
 # every pull request
 lint:
-    {{ just_executable() }} actions-check workflow-audit actionlint shell-lint go-lint go-test reuse-lint
+    {{ just_executable() }} ci-fresh actions-check workflow-audit actionlint shell-lint go-lint go-test reuse-lint
     hadolint Containerfile
     # BuildKit's own checks. --check is a buildx flag, so this needs Docker
     docker build --check -f Containerfile .

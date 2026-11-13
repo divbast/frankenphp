@@ -70,6 +70,10 @@ PHP
 	features=$("${BIN}" php-cli -r "${report}")
 	IFS=',' read -r -a required <<<"${REQUIRED_GD_FEATURES}"
 	for feature in "${required[@]}"; do
+		# Padding around a name would never match a line of gd_info()'s
+		# report, so trim it; an item that is only padding is no feature.
+		feature="${feature#"${feature%%[![:space:]]*}"}"
+		feature="${feature%"${feature##*[![:space:]]}"}"
 		if [[ -n "${feature}" ]] && ! grep -qxF "${feature}" <<<"${features}"; then
 			fail "gd_info() reports no ${feature}, which REQUIRED_GD_FEATURES asks for."
 		fi

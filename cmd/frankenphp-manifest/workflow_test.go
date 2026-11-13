@@ -246,7 +246,8 @@ func enclosingIf(lines []string, at int) string {
 //     every linter, or `mise install`;
 //   - the job's own env: sets MISE_AUTO_INSTALL: "false", without which
 //     `mise exec`, the shell of every justfile recipe, installs every
-//     missing tool before it runs one, and no step sets it to anything else;
+//     missing tool before it runs one, and nothing else in the job names it,
+//     not even a step repeating that value;
 //   - ci-checkout depends on no other recipe and runs no `mise install` or
 //     `just setup`.
 //
@@ -290,24 +291,8 @@ func TestPublishJobInstallsOnlyWhatItRuns(t *testing.T) {
 		}
 	}
 
-	// Every step inherits the job's env:, and a step may only repeat it.
-	env := jobEnv(job)
-	autoInstallOff := false
-	stepOff := regexp.MustCompile(`^MISE_AUTO_INSTALL: ("false"|'false'|false)$`)
-	for i, line := range job {
-		trimmed := strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(trimmed, "#"):
-		case installs.MatchString(trimmed):
-			t.Errorf("the publish job runs %q, which installs every tool in mise.toml", trimmed)
-		case env[i] && trimmed == `MISE_AUTO_INSTALL: "false"`:
-			autoInstallOff = true
-		case strings.Contains(trimmed, "MISE_AUTO_INSTALL") && (env[i] || !stepOff.MatchString(trimmed)):
-			t.Errorf("the publish job sets %q, which lets `mise exec` install every tool in mise.toml", trimmed)
-		}
-	}
-	if !autoInstallOff {
-		t.Error(`the publish job's env: does not set MISE_AUTO_INSTALL: "false", so the first recipe it runs installs every tool in mise.toml`)
+	for _, problem := range autoInstallProblems(job) {
+		t.Error(problem)
 	}
 
 	recipe := recipeLines(readLines(t, "justfile"), "ci-checkout")
@@ -322,6 +307,72 @@ func TestPublishJobInstallsOnlyWhatItRuns(t *testing.T) {
 		if !strings.HasPrefix(trimmed, "#") && installs.MatchString(trimmed) {
 			t.Errorf("the justfile's ci-checkout recipe runs %q, which installs every tool in mise.toml", trimmed)
 		}
+	}
+}
+
+// autoInstallProblems reports every way the job fails to set
+// MISE_AUTO_INSTALL: "false" once, in its own env:. Every step inherits
+// that, so a line naming it anywhere else, a step's env: repeating the
+// value included, is a second place to edit and a way for the two to part.
+func autoInstallProblems(job []string) []string {
+	var problems []string
+	env := jobEnv(job)
+	set := 0
+	for i, line := range job {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, "#"):
+		case installs.MatchString(trimmed):
+			problems = append(problems, fmt.Sprintf("the publish job runs %q, which installs every tool in mise.toml", trimmed))
+		case env[i] && trimmed == `MISE_AUTO_INSTALL: "false"`:
+			set++
+		case strings.Contains(trimmed, "MISE_AUTO_INSTALL"):
+			problems = append(problems, fmt.Sprintf("the publish job sets %q outside its own env:, or to something but \"false\"; the job's env: is the one place, and a step repeating it can part from it", trimmed))
+		}
+	}
+	switch {
+	case set == 0:
+		problems = append(problems, `the publish job's env: does not set MISE_AUTO_INSTALL: "false", so the first recipe it runs installs every tool in mise.toml`)
+	case set > 1:
+		problems = append(problems, `the publish job's env: sets MISE_AUTO_INSTALL: "false" more than once`)
+	}
+	return problems
+}
+
+// TestAutoInstallProblems proves autoInstallProblems fails on each way the
+// job can go wrong: no setting, a repeat in a step in any spelling of
+// false, a different value, and a setting beside the job's.
+func TestAutoInstallProblems(t *testing.T) {
+	t.Parallel()
+	const head = "  publish:\n    env:\n      IMAGE: x\n"
+	const off = "      MISE_AUTO_INSTALL: \"false\"\n"
+	const steps = "    steps:\n      - run: true\n"
+	tests := []struct {
+		name string
+		job  string
+		want string // a substring of the one problem, or "" for none
+	}{
+		{"once, in the job env", head + off + steps, ""},
+		{"absent", head + steps, "does not set"},
+		{"step repeats it", head + off + steps + "        env:\n          MISE_AUTO_INSTALL: \"false\"\n", "outside its own env"},
+		{"step repeats it unquoted", head + off + steps + "        env:\n          MISE_AUTO_INSTALL: false\n", "outside its own env"},
+		{"step turns it on", head + off + steps + "        env:\n          MISE_AUTO_INSTALL: \"true\"\n", "outside its own env"},
+		{"job env twice", head + off + off + steps, "more than once"},
+		{"job env true", head + "      MISE_AUTO_INSTALL: \"true\"\n" + steps, "outside its own env"},
+		{"a commented mention is fine", head + off + "      # MISE_AUTO_INSTALL: \"false\"\n" + steps, ""},
+		{"mise install", head + off + steps + "      - run: mise install\n", "installs every tool"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			problems := autoInstallProblems(strings.Split(strings.TrimSuffix(tt.job, "\n"), "\n"))
+			switch {
+			case tt.want == "" && len(problems) != 0:
+				t.Errorf("problems = %q, want none", problems)
+			case tt.want != "" && (len(problems) == 0 || !strings.Contains(strings.Join(problems, "\n"), tt.want)):
+				t.Errorf("problems = %q, want one containing %q", problems, tt.want)
+			}
+		})
 	}
 }
 
