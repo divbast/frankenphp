@@ -666,6 +666,10 @@ func TestPublishPermissionsUnchanged(t *testing.T) {
 // workflow pins (divbast/renovate-config's default.json, customManagers),
 // as Renovate reads them: a pin in any other shape is one Renovate never
 // moves.
+//
+// These are copies. The preset's default.json is the source, and
+// renovate-config's CLAUDE.md lists every copy: a change to a pattern
+// there is a change to buildkitPin and misePin here (FP-4, backlog).
 var (
 	buildkitPin = regexp.MustCompile(`image=(?<depName>moby/buildkit):(?<currentValue>v[0-9.]+)@(?<currentDigest>sha256:[a-f0-9]{64})`)
 	misePin     = regexp.MustCompile(`# renovate: datasource=(?<datasource>github-releases) depName=(?<depName>jdx/mise)\n\s*MISE_VERSION: ["']?(?<currentValue>[0-9.]+)["']?`)
