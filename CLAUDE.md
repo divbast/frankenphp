@@ -109,11 +109,8 @@ this project's one record of LLM involvement.
   `sqlite-autoconf` archive since 3.49 configures with autosetup, which
   refuses the `--with-pic` and `--enable-pic` spc passes to it, so a
   `custom-url` line for a newer one fails the build at sqlite's configure.
-  Each advisory sqlite.org lists as fixed since 3.45.2
-  (https://www.sqlite.org/cves.html) needs an attacker who can run SQL of
-  their own, write the database file, or pass out-of-range arguments to one
-  of sqlite's C functions. It moves when spc's config does, or once spc
-  configures sqlite without those flags
+  It moves when spc's config does, or once spc configures sqlite without
+  those flags
 - **A merge and the daily run publish only when the content moved.** Each
   compares both architectures' manifests with the published ones and
   passes `divbast-publish-decision -content-gated`, so a merge that leaves

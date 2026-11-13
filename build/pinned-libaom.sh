@@ -12,7 +12,9 @@
 # downloads. Its cache records a git clone's version as
 # "dev-<ref>+<short commit>", so only a clone of the tag reads
 # "dev-${LIBAOM_TAG}+". An app without gd, such as Baikal, has no libaom,
-# and passes, but only on a cache the craft wrote: the Containerfile's
+# and passes, unless the cache lists libavif or a source from aomedia's
+# repository without it, which fails: spc would have ignored the custom-git
+# line for a renamed package. It passes only on a cache the craft wrote: the Containerfile's
 # go-xcaddy step writes one first, holding go-xcaddy alone, and no libaom in
 # that proves nothing. Every craft fetches php-src; install-pkg never does.
 set -euo pipefail
@@ -46,6 +48,21 @@ if ! grep -qxF php-src <<<"${names}"; then
 	exit 1
 fi
 if ! grep -qxF libaom <<<"${names}"; then
+	# No libaom is a pass only for a build that has nothing to bring it in.
+	# libavif needs the codec, and aomedia's repository is where libaom comes
+	# from: either in the cache without a libaom entry means spc fetched the
+	# codec under another name, or the custom-git line missed, and the pin
+	# proves nothing.
+	reason=""
+	if grep -qxF libavif <<<"${names}"; then
+		reason="libavif, which needs libaom,"
+	elif jq -e 'any(.[]; (.source.config.url? // "") | type == "string" and contains("aomedia.googlesource.com"))' "${CACHE}" >/dev/null; then
+		reason="a source from aomedia.googlesource.com, where libaom comes from,"
+	fi
+	if [[ -n "${reason}" ]]; then
+		fail "${CACHE} lists ${reason} but has no libaom entry: spc renamed its libaom package, or fetched it another way, so it ignored the custom-git line and LIBAOM_TAG=${LIBAOM_TAG} pins nothing."
+		exit 1
+	fi
 	echo "no libaom in this build, so LIBAOM_TAG=${LIBAOM_TAG} pins nothing here"
 	exit 0
 fi

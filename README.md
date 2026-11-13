@@ -128,12 +128,7 @@ sqlite stays at 3.45.2, the release spc's config names. Every
 `sqlite-autoconf` archive since 3.49 configures with autosetup, which
 refuses the `--with-pic` and `--enable-pic` that spc passes to every
 library it configures this way, so pointing spc at a newer one fails the
-build at sqlite's configure. Each advisory
-[sqlite.org lists](https://www.sqlite.org/cves.html) as fixed since 3.45.2
-needs an attacker who can run SQL of their own, write the database file,
-or pass out-of-range arguments to one of sqlite's C functions; in Baikal
-or LibreSpeed the first two take a SQL injection in the app, or write
-access to its data, first.
+build at sqlite's configure.
 
 ## The manifest
 
@@ -207,10 +202,10 @@ or whose records are for another app or architecture.
 - **Every merge to main** builds both architectures from scratch, and
   publishes them only if either architecture's manifest differs from the
   published one. A merge that changes only a check under `build/`, a
-  workflow or the documentation changes nothing the binary is built
-  from, so it publishes, and asks every app to move its digest, only if
-  the Go toolchain or a library spc resolves at build time has moved since
-  the published build.
+  workflow or the documentation leaves the recipe as it was, so it
+  publishes, and asks every app to move its digest, only if the manifest
+  moved anyway: the Go toolchain or a library spc resolves at build time
+  has moved since the published build.
 - **Every day at 12:13 UTC** both are rebuilt from scratch, and published
   only if either architecture's manifest differs from the published one,
   whether main is still the published commit or has moved past it.
