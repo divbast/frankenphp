@@ -264,6 +264,11 @@ var verifyFlags = []string{
 	"--source-ref refs/heads/main",
 }
 
+// createdFromRun is how the staged index's created annotation is dated:
+// by when the run, or this attempt at it, started. The commit's time would
+// date a daily republish of an unchanged commit by that commit.
+const createdFromRun = `created=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq .run_started_at)`
+
 // tagFlag matches an imagetools create -t or --tag, and the tag it names.
 var tagFlag = regexp.MustCompile(`(?:^|\s)(?:-t|--tag)(?:\s+|=)("[^"]*"|\S+)`)
 
@@ -273,11 +278,11 @@ var tagFlag = regexp.MustCompile(`(?:^|\s)(?:-t|--tag)(?:\s+|=)("[^"]*"|\S+)`)
 // was and a re-run of the job publishes again:
 //
 //   - the job pushes each architecture, stages the index under
-//     :<app>-staging alone, attests the staged digest, verifies it as a
-//     file fetched by that digest and hashed back to it, moves :<app> to
-//     the digest from one source with no annotations, so the bytes and the
-//     digest stay the attested ones, and then checks the tag anonymously,
-//     in that order;
+//     :<app>-staging alone, dated by createdFromRun, attests the staged
+//     digest, verifies it as a file fetched by that digest and hashed
+//     back to it, moves :<app> to the digest from one source with no
+//     annotations, so the bytes and the digest stay the attested ones,
+//     and then checks the tag anonymously, in that order;
 //   - no other step names :<app> as a tag or as a destination;
 //   - a last step, run on a failure that came before the move, says no
 //     public tag moved and that re-running the failed job publishes.
@@ -308,6 +313,7 @@ func TestPublishAttestsBeforePromote(t *testing.T) {
 			[]string{
 				`-t "${IMAGE}:${APP}-staging"`,
 				`echo "digest=${digest}" >> "${GITHUB_OUTPUT}"`,
+				createdFromRun,
 			},
 		},
 		{
