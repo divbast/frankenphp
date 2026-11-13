@@ -127,6 +127,59 @@ this project's one record of LLM involvement.
 - **Both architectures publish together or not at all.** The index is made
   from the two images the publish job pushed, by digest, and a tag never
   moves to an older commit than the one it holds
+- **Each app publishes on its own.** `publish` needs `lint` and `build`
+  and runs unless the run was cancelled or lint failed, so a failed leg
+  fails only its own app's publish, at the carrier download, before
+  anything is pushed. `required` still needs every job, so the run and any
+  pull request still go red. A leg uploads its carrier as its last step,
+  which is what makes the download the gate.
+  `cmd/frankenphp-manifest/workflow_test.go` holds the gate
+- **`:<app>` moves only once its index is attested and verified.** The
+  publish job stages the index as `:<app>-staging`, attests that digest,
+  fetches the index's bytes anonymously by digest, checks they hash to it
+  and runs apps' own `gh attestation verify` on the file, with three
+  tries. A `--dry-run` of the move must then show those same bytes before
+  a single-source `imagetools create` with no annotations points `:<app>`
+  at them. Every step up to the move runs only when the decision says
+  publish, and no step may `continue-on-error`. Anything that fails before
+  the move leaves `:<app>` on the index it already held, and the job's
+  last step says so: re-running the failed job publishes while the build
+  legs' carriers are kept (`retention-days: 1`), and after that the next
+  daily or push run does, unless the failing step names its own remedy: a
+  failed anonymous fetch points at the package's settings, and a dry run
+  showing another digest says a re-run meets the same. The publish
+  decision reads only `:<app>`, so a staged index never counts as
+  published. The job's permissions stay `contents: read` and `packages`,
+  `id-token` and `attestations: write`; `created` comes from the clock,
+  not the run's API record, which would take `actions: read`.
+  `cmd/frankenphp-manifest/workflow_test.go` holds the order, the `if:`
+  gates and the permissions
+- **The publish job's shell is pinned line for line.** Every `run:` block
+  of the publish job must equal
+  `cmd/frankenphp-manifest/testdata/publish-shell.txt`, because no check
+  that reads the shell for writes to `:<app>` survives one written another
+  way. So must what shapes how bash runs it: each step's `env:`, the job's
+  keys, `env:` and `defaults:`, and the workflow's keys, `defaults:` and
+  the names of its `env:`, whose `MISE_VERSION` value Renovate moves. An
+  env entry such as `BASH_ENV` runs before any script, and a `PATH` picks
+  every command. `TestPublishShellIsBashWithPipefail` holds the job's
+  effective shell to `bash`, `--noprofile --norc -eo pipefail`, which the
+  behaviour tests run the steps under; left unset, Actions runs
+  `bash -e` without pipefail. A step written in any YAML form but the plain one the extractor
+  reads, such as `run: |-`, a flow mapping or a `shell:` key, fails the
+  test rather than going unread. A change shows as a diff: read it, and
+  only if it is meant run
+  `go test ./cmd/frankenphp-manifest/ -run '^TestPublishShellPinned$' -update`
+  and commit the file with it. `publish_test.go` also runs the verify and
+  dry-run steps' own scripts under bash against the stubs in
+  `testdata/stubs`, so a lost `exit 1` fails a test, not a publish
+- **BuildKit and mise are pinned in `build.yml`**, BuildKit by digest in
+  each `docker/setup-buildx-action`'s `driver-opts`, mise as the
+  workflow's `MISE_VERSION`, which every `jdx/mise-action` step passes as
+  `version`. Left unset, the actions take `buildx-stable-1` and the newest
+  mise release at least a day old. divbast/renovate-config's shared
+  managers move them, and read them only in exactly these shapes, which
+  `cmd/frankenphp-manifest/workflow_test.go` holds
 
 ## Key commands
 

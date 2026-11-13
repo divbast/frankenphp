@@ -1,0 +1,157 @@
+## workflow keys
+name
+on
+permissions
+env
+concurrency
+defaults
+jobs
+
+## workflow env names
+MISE_VERSION
+
+## workflow defaults
+run:
+  shell: bash
+
+## publish job keys
+name
+needs
+if
+strategy
+concurrency
+runs-on
+timeout-minutes
+permissions
+env
+steps
+
+## publish job env
+IMAGE: ghcr.io/divbast/frankenphp
+APP: ${{ matrix.app }}
+MISE_AUTO_INSTALL: "false"
+
+## publish job defaults
+(none)
+
+## (no name)
+run:
+just ci-checkout
+
+## (no name)
+run:
+just ci-tools
+
+## Decide whether to publish
+env: EVENT: ${{ github.event_name }}
+env: GH_TOKEN: ${{ github.token }}
+run:
+# actions/checkout points origin/main at the commit this run built,
+# not at main's tip, so a newer published commit would read as one
+# that is not on main. The repository is public; no credentials.
+git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
+if ! published=$(.ci/bin/divbast-published-revision "${IMAGE}:${APP}"); then
+  echo "::error::Cannot read what ${IMAGE}:${APP} was built from. If the package is private, as its first push can leave it, the owner makes it public in its settings (https://github.com/orgs/divbast/packages/container/frankenphp/settings); nothing in this workflow can."
+  exit 1
+fi
+args=(-event "${EVENT}" -built "${GITHUB_SHA}" -published "${published}")
+if [ "${EVENT}" = schedule ] && [ "${published}" = "${GITHUB_SHA}" ]; then
+  # Every architecture, as an anonymous client pulls them
+  skopeo copy --all --quiet --src-no-creds "docker://${IMAGE}:${APP}" oci-archive:/tmp/published.tar
+  change=$(go run ./cmd/frankenphp-manifest -changes -app "${APP}" -published /tmp/published.tar \
+    amd64=/tmp/carriers/amd64/carrier.tar arm64=/tmp/carriers/arm64/carrier.tar)
+  args+=(-content-change "${change}")
+fi
+.ci/bin/divbast-publish-decision "${args[@]}"
+
+## Push both architectures
+run:
+for arch in amd64 arm64; do
+  skopeo copy --all --quiet \
+    --digestfile "/tmp/digest-${arch}" \
+    --dest-authfile "${HOME}/.docker/config.json" \
+    "oci-archive:/tmp/carriers/${arch}/carrier.tar" \
+    "docker://${IMAGE}:${APP}-${arch}"
+done
+
+## Stage the index
+run:
+version=$(jq -er .frankenphp /tmp/carriers/amd64/manifest.json)
+created=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+docker buildx imagetools create \
+  --metadata-file /tmp/index.json \
+  --annotation "index:org.opencontainers.image.version=${version}" \
+  --annotation "index:org.opencontainers.image.revision=${GITHUB_SHA}" \
+  --annotation "index:org.opencontainers.image.created=${created}" \
+  --annotation "index:org.opencontainers.image.description=The FrankenPHP binary for divbast's ${APP} image, and the records of how it was built" \
+  -t "${IMAGE}:${APP}-staging" \
+  "${IMAGE}@$(cat /tmp/digest-amd64)" \
+  "${IMAGE}@$(cat /tmp/digest-arm64)"
+digest=$(jq -er '."containerimage.descriptor".digest' /tmp/index.json)
+echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+
+## Verify the attestation as apps do
+env: DIGEST: ${{ steps.stage.outputs.digest }}
+env: GH_TOKEN: ${{ github.token }}
+run:
+if ! skopeo inspect --raw --no-creds "docker://${IMAGE}@${DIGEST}" >"${RUNNER_TEMP}/staged-index.json"; then
+  echo "lasting=true" >> "${GITHUB_OUTPUT}"
+  echo "::error::${IMAGE}@${DIGEST} is not anonymously pullable, so the app's tag ${IMAGE}:${APP} didn't move. If the package is private, as its first push can leave it, the owner makes it public in its settings (https://github.com/orgs/divbast/packages/container/frankenphp/settings); nothing in this workflow can."
+  exit 1
+fi
+fetched=$(sha256sum "${RUNNER_TEMP}/staged-index.json")
+if [ "sha256:${fetched%% *}" != "${DIGEST}" ]; then
+  echo "::error::${IMAGE}@${DIGEST} came back as bytes that hash to sha256:${fetched%% *}."
+  exit 1
+fi
+empty=$(mktemp -d)
+for try in 1 2 3; do
+  if DOCKER_CONFIG="${empty}" gh attestation verify "${RUNNER_TEMP}/staged-index.json" \
+    --repo divbast/frankenphp \
+    --signer-workflow divbast/frankenphp/.github/workflows/build.yml@refs/heads/main \
+    --source-ref refs/heads/main; then
+    exit 0
+  fi
+  if [ "${try}" -lt 3 ]; then
+    sleep 10
+  fi
+done
+echo "::error::gh did not verify the attestation of ${IMAGE}@${DIGEST} in three tries, ten seconds apart."
+exit 1
+
+## Check the move keeps the attested digest
+env: DIGEST: ${{ steps.stage.outputs.digest }}
+run:
+docker buildx imagetools create --dry-run -t "${IMAGE}:${APP}" "${IMAGE}@${DIGEST}" >"${RUNNER_TEMP}/promote-index.json"
+# The index without buildx's newline, the same on GNU and BSD tools
+would=$(printf '%s' "$(<"${RUNNER_TEMP}/promote-index.json")" | sha256sum)
+if [ "sha256:${would%% *}" != "${DIGEST}" ]; then
+  echo "lasting=true" >> "${GITHUB_OUTPUT}"
+  echo "::error::Moving ${IMAGE}:${APP} would push an index that hashes to sha256:${would%% *}, not the attested ${DIGEST}, so the app's tag didn't move. buildx no longer copies a single index unchanged; a re-run would meet the same."
+  exit 1
+fi
+
+## Move the tag to the verified index
+env: DIGEST: ${{ steps.stage.outputs.digest }}
+run:
+docker buildx imagetools create -t "${IMAGE}:${APP}" "${IMAGE}@${DIGEST}"
+
+## Check the tag is the pushed index to an anonymous client
+env: DIGEST: ${{ steps.stage.outputs.digest }}
+run:
+if ! pulled=$(skopeo inspect --raw --no-creds "docker://${IMAGE}:${APP}" | sha256sum) ||
+  [ "sha256:${pulled%% *}" != "${DIGEST}" ]; then
+  echo "::error::${IMAGE}:${APP} is not anonymously pullable as ${DIGEST}. If the package is private, as its first push can leave it, the owner makes it public in its settings (https://github.com/orgs/divbast/packages/container/frankenphp/settings); nothing in this workflow can."
+  exit 1
+fi
+echo "${IMAGE}:${APP} is ${DIGEST} to an anonymous client"
+
+## Say what the failure left
+env: LASTING: ${{ steps.verify.outputs.lasting }}${{ steps.keep.outputs.lasting }}
+run:
+note="The app's tag ${IMAGE}:${APP} didn't move: it still names the index it named before this run."
+if [ -z "${LASTING}" ]; then
+  note+=" Re-running the failed job publishes within a day of the build, while its carriers are kept; after that, the next daily or push run publishes."
+fi
+echo "::error::${note}"
+

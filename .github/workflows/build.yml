@@ -35,6 +35,13 @@ on:
 
 permissions: {}
 
+# The mise every jdx/mise-action step below installs, which would otherwise
+# be the newest release at least a day old when the step runs. Renovate
+# moves it.
+env:
+  # renovate: datasource=github-releases depName=jdx/mise
+  MISE_VERSION: 2026.11.7
+
 # GitHub keeps one pending run per group, and a newer one replaces it. The
 # event in the group stops a push run replacing a pending daily or button
 # run.
@@ -75,14 +82,20 @@ jobs:
         with:
           persist-credentials: false
       - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        with:
+          version: ${{ env.MISE_VERSION }}
 
       # divbast/ci at the commit the workflows pin, and its tools in .ci/bin
       - run: just setup
       - run: just ci-tools
 
       # The default docker driver cannot export an OCI archive with its
-      # provenance
+      # provenance. The BuildKit daemon that builds the carrier is pinned
+      # by digest, where the action would take buildx-stable-1 as it
+      # stands that day; Renovate moves it.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
       - name: Pin the build clock to the commit
         run: echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "${GITHUB_ENV}"
       # Only for a pull request, whose build never publishes.
@@ -186,14 +199,17 @@ jobs:
 
   # One per app. Both architectures this run built publish together, or
   # neither does: the index is made from the two images this job pushed,
-  # by digest, so it never mixes runs.
+  # by digest, so it never mixes runs. Each app's job waits for lint and
+  # the build matrix but runs even when a leg failed, so one app's broken
+  # build holds back only its own publish: that app's job fails fetching
+  # the carrier its leg never uploaded, before it pushes anything, while
+  # the other app's publishes. The run still ends red, through required.
+  # cmd/frankenphp-manifest/workflow_test.go holds the condition below.
   publish:
     name: publish (${{ matrix.app }})
-    needs: required
+    needs: [lint, build]
     # From main only: a merge, the daily rebuild and the button.
-    if: >-
-      github.ref == 'refs/heads/main'
-      && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    if: ${{ !cancelled() && needs.lint.result == 'success' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     strategy:
       # One app's failure must not cancel the other's publish halfway.
       fail-fast: false
@@ -233,14 +249,19 @@ jobs:
       # cmd/frankenphp-manifest/workflow_test.go holds the job to this.
       - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
         with:
+          version: ${{ env.MISE_VERSION }}
           install_args: core:go aqua:casey/just
       # divbast/ci at the commit the workflows pin, and its tools in .ci/bin
       - run: just ci-checkout
       - run: just ci-tools
-      # For `imagetools create`
+      # For `imagetools create`, which needs no daemon, though the action
+      # starts one all the same: the same pinned BuildKit as the build's.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
 
-      # Both, or the job fails here, before anything is pushed.
+      # Both, or the job fails here, before anything is pushed: a leg
+      # uploads its carrier as its last step, so a failed leg uploads none.
       - name: Fetch the amd64 carrier
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -259,7 +280,9 @@ jobs:
       # merge's run, racing the daily run on the same commit, or a re-run
       # with its old carriers, would otherwise publish libraries its build
       # fetched earlier over what the daily run had just published. Nothing
-      # moves the tag back to an older commit either.
+      # moves the tag back to an older commit either. It reads only
+      # :<app>, never the staging tag below, so an index staged but never
+      # promoted does not count as published.
       # cmd/frankenphp-manifest/workflow_test.go holds the condition below.
       # GH_TOKEN tells a private package from an absent one.
       - name: Decide whether to publish
@@ -293,6 +316,14 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ github.token }}
 
+      # From here to the move, a failure leaves the app's tag :<app> where
+      # it was, so apps never see a digest with no attestation, and the
+      # move runs only once every step before it passed. A re-run of this
+      # job decides against that tag and publishes again, while the build
+      # legs' carriers last; after that the next daily or push run does.
+      # The last step says so on a failure.
+      # cmd/frankenphp-manifest/workflow_test.go holds the order.
+
       # Each to its own tag, which only feeds the index below
       - name: Push both architectures
         if: steps.decide.outputs.publish == 'true'
@@ -305,21 +336,24 @@ jobs:
               "docker://${IMAGE}:${APP}-${arch}"
           done
 
-      # The description is what GHCR shows on the package page; the version
-      # is FrankenPHP's.
-      - name: Merge the architectures into one index
+      # The index, tagged only :<app>-staging, which no app reads. The
+      # description is what GHCR shows on the package page; the version is
+      # FrankenPHP's. created is now, as this run stages it: the commit's
+      # time would date a daily republish of an unchanged commit by that
+      # commit.
+      - name: Stage the index
         if: steps.decide.outputs.publish == 'true'
-        id: merge
+        id: stage
         run: |
           version=$(jq -er .frankenphp /tmp/carriers/amd64/manifest.json)
-          created=$(date -u -d "@$(git log -1 --pretty=%ct)" +%Y-%m-%dT%H:%M:%SZ)
+          created=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           docker buildx imagetools create \
             --metadata-file /tmp/index.json \
             --annotation "index:org.opencontainers.image.version=${version}" \
             --annotation "index:org.opencontainers.image.revision=${GITHUB_SHA}" \
             --annotation "index:org.opencontainers.image.created=${created}" \
             --annotation "index:org.opencontainers.image.description=The FrankenPHP binary for divbast's ${APP} image, and the records of how it was built" \
-            -t "${IMAGE}:${APP}" \
+            -t "${IMAGE}:${APP}-staging" \
             "${IMAGE}@$(cat /tmp/digest-amd64)" \
             "${IMAGE}@$(cat /tmp/digest-arm64)"
           digest=$(jq -er '."containerimage.descriptor".digest' /tmp/index.json)
@@ -331,17 +365,85 @@ jobs:
         if: steps.decide.outputs.publish == 'true'
         with:
           subject-name: ghcr.io/divbast/frankenphp
-          subject-digest: ${{ steps.merge.outputs.digest }}
+          subject-digest: ${{ steps.stage.outputs.digest }}
           push-to-registry: true
           create-storage-record: false
 
+      # What every app's CI runs before it builds on this digest, here
+      # before any app can see it. The index's bytes come by digest, as an
+      # anonymous client gets them, and must hash back to it; gh then
+      # verifies that file, and never reads a registry login. The
+      # attestation was written seconds ago, so gh gets three tries, ten
+      # seconds apart. A failed fetch names its own remedy, the package's
+      # settings, and sets lasting, so the last step does not point at a
+      # re-run in its place. publish_test.go runs this script.
+      - name: Verify the attestation as apps do
+        if: steps.decide.outputs.publish == 'true'
+        id: verify
+        env:
+          DIGEST: ${{ steps.stage.outputs.digest }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! skopeo inspect --raw --no-creds "docker://${IMAGE}@${DIGEST}" >"${RUNNER_TEMP}/staged-index.json"; then
+            echo "lasting=true" >> "${GITHUB_OUTPUT}"
+            echo "::error::${IMAGE}@${DIGEST} is not anonymously pullable, so the app's tag ${IMAGE}:${APP} didn't move. If the package is private, as its first push can leave it, the owner makes it public in its settings (https://github.com/orgs/divbast/packages/container/frankenphp/settings); nothing in this workflow can."
+            exit 1
+          fi
+          fetched=$(sha256sum "${RUNNER_TEMP}/staged-index.json")
+          if [ "sha256:${fetched%% *}" != "${DIGEST}" ]; then
+            echo "::error::${IMAGE}@${DIGEST} came back as bytes that hash to sha256:${fetched%% *}."
+            exit 1
+          fi
+          empty=$(mktemp -d)
+          for try in 1 2 3; do
+            if DOCKER_CONFIG="${empty}" gh attestation verify "${RUNNER_TEMP}/staged-index.json" \
+              --repo divbast/frankenphp \
+              --signer-workflow divbast/frankenphp/.github/workflows/build.yml@refs/heads/main \
+              --source-ref refs/heads/main; then
+              exit 0
+            fi
+            if [ "${try}" -lt 3 ]; then
+              sleep 10
+            fi
+          done
+          echo "::error::gh did not verify the attestation of ${IMAGE}@${DIGEST} in three tries, ten seconds apart."
+          exit 1
+
+      # buildx shows the index the move would push, then a newline. Only
+      # the attested bytes may go under :<app>, so anything else stops the
+      # move before it runs, rather than the anonymous check finding it
+      # after the tag has moved. publish_test.go runs this script.
+      - name: Check the move keeps the attested digest
+        if: steps.decide.outputs.publish == 'true'
+        id: keep
+        env:
+          DIGEST: ${{ steps.stage.outputs.digest }}
+        run: |
+          docker buildx imagetools create --dry-run -t "${IMAGE}:${APP}" "${IMAGE}@${DIGEST}" >"${RUNNER_TEMP}/promote-index.json"
+          # The index without buildx's newline, the same on GNU and BSD tools
+          would=$(printf '%s' "$(<"${RUNNER_TEMP}/promote-index.json")" | sha256sum)
+          if [ "sha256:${would%% *}" != "${DIGEST}" ]; then
+            echo "lasting=true" >> "${GITHUB_OUTPUT}"
+            echo "::error::Moving ${IMAGE}:${APP} would push an index that hashes to sha256:${would%% *}, not the attested ${DIGEST}, so the app's tag didn't move. buildx no longer copies a single index unchanged; a re-run would meet the same."
+            exit 1
+          fi
+
+      # One source and no annotations, so buildx pushes the staged index's
+      # own bytes under :<app>, and the digest stays the one just verified.
+      - name: Move the tag to the verified index
+        if: steps.decide.outputs.publish == 'true'
+        id: promote
+        env:
+          DIGEST: ${{ steps.stage.outputs.digest }}
+        run: docker buildx imagetools create -t "${IMAGE}:${APP}" "${IMAGE}@${DIGEST}"
+
       # What apps pull, as they pull it. A private package, or a tag that is
-      # not the index just pushed, fails the run here rather than in every
+      # not the index just verified, fails the run here rather than in every
       # app's next build.
       - name: Check the tag is the pushed index to an anonymous client
         if: steps.decide.outputs.publish == 'true'
         env:
-          DIGEST: ${{ steps.merge.outputs.digest }}
+          DIGEST: ${{ steps.stage.outputs.digest }}
         run: |
           if ! pulled=$(skopeo inspect --raw --no-creds "docker://${IMAGE}:${APP}" | sha256sum) ||
             [ "sha256:${pulled%% *}" != "${DIGEST}" ]; then
@@ -349,3 +451,17 @@ jobs:
             exit 1
           fi
           echo "${IMAGE}:${APP} is ${DIGEST} to an anonymous client"
+
+      # A step before the move failed, so the move never ran. The
+      # carriers a re-run needs last as long as the build legs' upload
+      # keeps them, a day.
+      - name: Say what the failure left
+        if: failure() && steps.decide.outputs.publish == 'true' && steps.promote.outcome == 'skipped'
+        env:
+          LASTING: ${{ steps.verify.outputs.lasting }}${{ steps.keep.outputs.lasting }}
+        run: |
+          note="The app's tag ${IMAGE}:${APP} didn't move: it still names the index it named before this run."
+          if [ -z "${LASTING}" ]; then
+            note+=" Re-running the failed job publishes within a day of the build, while its carriers are kept; after that, the next daily or push run publishes."
+          fi
+          echo "::error::${note}"

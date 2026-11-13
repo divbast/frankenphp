@@ -20,12 +20,18 @@ Published as `ghcr.io/divbast/frankenphp`.
 | `:baikal` | Baikal's binary, for amd64 and arm64 |
 | `:librespeed` | LibreSpeed's binary, for amd64 and arm64 |
 | `:<app>-amd64`, `:<app>-arm64` | what each publish pushes first, to make the index above from. Not for use |
+| `:<app>-staging` | the index each publish attests and verifies before it moves `:<app>` to it. Not for use |
 
 Each tag is a carrier, not a runnable image: built `FROM scratch`, it holds
 the binary at `/frankenphp` and the records of how it was built under
 `/records/`. The binary links glibc dynamically, so it runs on the app's own
 base, such as `gcr.io/distroless/cc-debian13`, never on scratch. It carries
 no file capability, so it runs under `--cap-drop ALL`.
+
+Each index's `org.opencontainers.image.revision` annotation is the commit
+it was built from, and `org.opencontainers.image.created` the time its
+publish job made it, which for a daily republish of an unchanged commit is
+later than the commit.
 
 ## Using a binary
 
@@ -174,6 +180,21 @@ or whose records are for another app or architecture.
 
 Both architectures of a run publish together, or neither does, and a tag
 never moves back to an older commit than the one it holds.
+
+Each app publishes on its own. A build that fails for one app stops only
+that app's publish, before it pushes anything, while the other app's goes
+ahead; the run still fails, as a pull request with that failure does.
+
+`:<app>` moves last. A publish pushes the new index as `:<app>-staging`,
+attests it, verifies that attestation the way apps do, and checks that
+moving the tag keeps the digest; only then does it point `:<app>` at that
+digest. A publish that fails before then leaves `:<app>` on the index it
+already held, though the staging and per-architecture tags may have moved.
+Re-running the failed job publishes for a day after the build, while its
+carriers are kept; after that, the next daily or push run publishes. The
+exception is a failure that names its own remedy: an index no anonymous
+client can fetch points at the package's settings, and a dry run that
+shows another digest says a re-run would meet the same.
 
 ## Working here
 
