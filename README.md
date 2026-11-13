@@ -31,7 +31,9 @@ no file capability, so it runs under `--cap-drop ALL`.
 Each index's `org.opencontainers.image.revision` annotation is the commit
 it was built from, and `org.opencontainers.image.created` the time its
 publish job made it, which for a daily republish of an unchanged commit is
-later than the commit.
+later than the commit. The revision can be older than main: a merge that
+changes nothing in the binary publishes nothing, as
+[When a tag moves](#when-a-tag-moves) says.
 
 ## Using a binary
 
@@ -186,16 +188,25 @@ or whose records are for another app or architecture.
 
 ## When a tag moves
 
-- **Every merge to main** builds both architectures from scratch and
-  publishes them.
-- **Every day at 12:13 UTC** both are rebuilt from scratch. When main has
-  moved past the published commit, as after a merge whose own publish
-  failed, the run publishes main. When main is still the published
-  commit, it publishes only if either architecture's manifest differs from
-  the published one, and the run's summary says what moved. Only this run
-  compares manifests: a merge's run, or a re-run of an older one, could
-  otherwise publish libraries fetched before the daily run's over them.
-- **A manual run** of `build` on main publishes at once.
+- **Every merge to main** builds both architectures from scratch, and
+  publishes them only if either architecture's manifest differs from the
+  published one. A merge that changes only a check under `build/`, a
+  workflow or the documentation moves no tag, and asks no app to move its
+  digest.
+- **Every day at 12:13 UTC** both are rebuilt from scratch, and published
+  only if either architecture's manifest differs from the published one,
+  whether main is still the published commit or has moved past it.
+- **A manual run** of `build` on main publishes at once, whether or not
+  anything moved.
+
+The run's summary says what moved, or that nothing did. With nothing
+published yet, a run publishes. A published carrier whose records this
+commit cannot read, as after a change to what the manifest holds, counts
+as moved: `published manifest unreadable (schema N)`, N being the newest
+version of the manifest its records make. A merge's run on the commit
+that is already published compares nothing and publishes nothing: it
+could otherwise publish libraries its build fetched before the daily
+run's over them.
 
 Both architectures of a run publish together, or neither does, and a tag
 never moves back to an older commit than the one it holds.
@@ -210,8 +221,9 @@ moving the tag keeps the digest; only then does it point `:<app>` at that
 digest. A publish that fails before then leaves `:<app>` on the index it
 already held, though the staging and per-architecture tags may have moved.
 Re-running the failed job publishes for a day after the build, while its
-carriers are kept; after that, the next daily or push run publishes. The
-exception is a failure that names its own remedy: an index no anonymous
+carriers are kept; after that, a manual run of `build` publishes at once,
+and the next daily or push run does if its content moved. The exception
+is a failure that names its own remedy: an index no anonymous
 client can fetch points at the package's settings, and a dry run that
 shows another digest says a re-run would meet the same.
 

@@ -5,12 +5,13 @@
 // binaries from the records the build wrote beside it, and says what moved
 // between two of them.
 //
-// A manifest is what the daily rebuild compares with the published carrier
-// to decide whether to publish. spc resolves the Go toolchain and several C
-// libraries to their newest release while the build runs, so two builds of
-// one commit can hold different code without a commit to show for it;
-// nothing else in the image says so, and Trivy cannot see the libraries in
-// the binary.
+// A manifest is what a merge's run and the daily rebuild compare with the
+// published carrier to decide whether to publish: each publishes only when
+// an architecture's manifest moved. spc resolves the Go toolchain and
+// several C libraries to their newest release while the build runs, so two
+// builds of one commit can hold different code without a commit to show
+// for it; nothing else in the image says so, and Trivy cannot see the
+// libraries in the binary. And a merge can leave the binary as it was.
 //
 // It holds what decides the binary's code, and nothing that differs between
 // two builds of the same inputs: FrankenPHP, PHP and Caddy as the binary

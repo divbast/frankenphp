@@ -5,8 +5,8 @@
 // binary from the records in the carrier, and says what moved between two
 // of them. The build workflow runs it on each carrier it builds, which also
 // refuses a binary that carries a file capability, and the publish job on
-// the candidates and what is published, to decide whether a daily rebuild
-// publishes.
+// the candidates and what is published, to decide whether a merge's run or
+// the daily rebuild publishes.
 //
 // Usage:
 //

@@ -55,12 +55,14 @@ if ! published=$(.ci/bin/divbast-published-revision "${IMAGE}:${APP}"); then
   exit 1
 fi
 args=(-event "${EVENT}" -built "${GITHUB_SHA}" -published "${published}")
-if [ "${EVENT}" = schedule ] && [ "${published}" = "${GITHUB_SHA}" ]; then
+# A merge's run on the published commit compares nothing, and
+# skips: see above.
+if [[ -n "${published}" && ( "${EVENT}" == schedule || ( "${EVENT}" == push && "${published}" != "${GITHUB_SHA}" ) ) ]]; then
   # Every architecture, as an anonymous client pulls them
   skopeo copy --all --quiet --src-no-creds "docker://${IMAGE}:${APP}" oci-archive:/tmp/published.tar
   change=$(go run ./cmd/frankenphp-manifest -changes -app "${APP}" -published /tmp/published.tar \
     amd64=/tmp/carriers/amd64/carrier.tar arm64=/tmp/carriers/arm64/carrier.tar)
-  args+=(-content-change "${change}")
+  args+=(-content-change "${change}" -content-gated)
 fi
 .ci/bin/divbast-publish-decision "${args[@]}"
 
@@ -151,7 +153,7 @@ env: LASTING: ${{ steps.verify.outputs.lasting }}${{ steps.keep.outputs.lasting 
 run:
 note="The app's tag ${IMAGE}:${APP} didn't move: it still names the index it named before this run."
 if [ -z "${LASTING}" ]; then
-  note+=" Re-running the failed job publishes within a day of the build, while its carriers are kept; after that, the next daily or push run publishes."
+  note+=" Re-running the failed job publishes within a day of the build, while its carriers are kept; after that, a manual run of build publishes at once, and the next daily or push run does if its content moved."
 fi
 echo "::error::${note}"
 

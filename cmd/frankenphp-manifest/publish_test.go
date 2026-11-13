@@ -571,10 +571,20 @@ func (r *stepResult) callsTo(commands ...string) []string {
 // nothing else of the host's environment.
 func runStep(t *testing.T, script string, env map[string]string) *stepResult {
 	t.Helper()
+	return runStepIn(t, script, env, nil)
+}
+
+// runStepIn is runStep, which first has setup, when not nil, lay out in
+// the directory the step runs in what its script finds there.
+func runStepIn(t *testing.T, script string, env map[string]string, setup func(t *testing.T, dir string)) *stepResult {
+	t.Helper()
 	dir := t.TempDir()
 	temp := filepath.Join(dir, "runner-temp")
 	if err := os.Mkdir(temp, 0o755); err != nil { //nolint:gosec // G301: a test's own temporary directory
 		t.Fatal(err)
+	}
+	if setup != nil {
+		setup(t, temp)
 	}
 	file := writeIn(t, dir, "step.sh", []byte(script))
 	outputs := writeIn(t, dir, "github-output", nil)
@@ -621,12 +631,16 @@ func checkPass(t *testing.T, r *stepResult, pass bool) {
 }
 
 // stubBin returns a directory holding each stub in testdata/stubs under
-// the name of the command it stands in for.
+// the name of the command it stands in for: tool.sh stands in for git and
+// go, by the name it runs as.
 func stubBin(t *testing.T) string {
 	t.Helper()
 	bin := t.TempDir()
-	for _, name := range []string{"docker", "gh", "skopeo", "sleep"} {
-		stub, err := filepath.Abs(filepath.Join("testdata", "stubs", name+".sh"))
+	for name, file := range map[string]string{
+		"docker": "docker.sh", "gh": "gh.sh", "skopeo": "skopeo.sh", "sleep": "sleep.sh",
+		"git": "tool.sh", "go": "tool.sh",
+	} {
+		stub, err := filepath.Abs(filepath.Join("testdata", "stubs", file))
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -3,7 +3,8 @@
 
 # The daily stall check, through divbast/ci's stall.yml: a Renovate pull
 # request that never goes green or never finishes, Renovate itself silent,
-# or daily slots that should have published one app's binary and did not.
+# or daily slots that failed, or should have published one app's binary
+# and did not.
 # A scheduled run's failure goes to whoever last edited the cron line below.
 
 name: stall
@@ -45,6 +46,9 @@ jobs:
     with:
       checks: '["slots"]'
       published: ghcr.io/divbast/frankenphp:baikal
+      # build.yml publishes only when the binary's content moved, so a
+      # slot that succeeded and left an older commit published is not lost.
+      content-gated: true
     permissions:
       contents: read # read main, compare commits, the repository's age
       pull-requests: read # list Renovate's pull requests
@@ -59,6 +63,7 @@ jobs:
     with:
       checks: '["slots"]'
       published: ghcr.io/divbast/frankenphp:librespeed
+      content-gated: true
     permissions:
       contents: read # read main, compare commits, the repository's age
       pull-requests: read # list Renovate's pull requests

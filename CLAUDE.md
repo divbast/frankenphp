@@ -95,11 +95,10 @@ this project's one record of LLM involvement.
   `LIBAOM_TAG`, and sqlite and bzip2 from fixed URLs in spc's config. The
   rest are how library fixes arrive, and Trivy cannot see any of them in
   the binary. The manifest records each input (`go`, `xcaddy` and
-  `libraries`), pinned or chosen, so the daily run
-  rebuilds from scratch and, when main is still the published commit,
-  publishes when either architecture's manifest moved; and every run that
-  can publish builds without the cache, which would otherwise hold what an
-  earlier run fetched
+  `libraries`), pinned or chosen, so the daily run rebuilds from scratch
+  and publishes when either architecture's manifest moved; and every run
+  that can publish builds without the cache, which would otherwise hold
+  what an earlier run fetched
 - **sqlite stays at 3.45.2, the release spc's config names.** Every
   `sqlite-autoconf` archive since 3.49 configures with autosetup, which
   refuses the `--with-pic` and `--enable-pic` spc passes to it, so a
@@ -109,13 +108,22 @@ this project's one record of LLM involvement.
   their own, write the database file, or pass out-of-range arguments to one
   of sqlite's C functions. It moves when spc's config does, or once spc
   configures sqlite without those flags
-- **Only the daily rebuild of the published commit compares manifests.** A
-  merge's run that compared, racing the daily run on the same commit, or a
-  re-run of a publish job with its old carriers, would publish libraries its
-  build fetched earlier over what the daily run had just published: content
-  moving backwards within one commit. A push or a dispatch passes no
-  content change at all. `cmd/frankenphp-manifest/workflow_test.go` fails if
-  `build.yml` compares under any other condition
+- **A merge and the daily run publish only when the content moved.** Each
+  compares both architectures' manifests with the published ones and
+  passes `divbast-publish-decision -content-gated`, so a merge that leaves
+  the binary as it was moves no tag and makes no digest pull request in
+  any app; with nothing published they publish, and the button always
+  does. A merge's run compares only once main has moved past the published
+  commit: on that commit a content change publishes whatever the event,
+  so a merge's run racing the daily run, or a re-run of a publish job with
+  its old carriers, would publish libraries its build fetched earlier over
+  what the daily run had just published, content moving backwards within
+  one commit. The button compares nothing. The flag goes only with the
+  compare, so nothing is gated on a compare that did not run.
+  `cmd/frankenphp-manifest/workflow_test.go` pins the condition and runs
+  the decide step for every event against stubs. `stall.yml`'s slots jobs
+  pass `content-gated: true`, without which a successful slot that left an
+  older commit published counts as lost
 - **The manifest holds how the binary was built, not only what it holds.**
   `spc`, `builder`, `craft` and `recipe` (schema 3) catch what the binary
   does not report: an spc bump, a builder bump with the same FrankenPHP,
@@ -161,8 +169,9 @@ this project's one record of LLM involvement.
   publish, and no step may `continue-on-error`. Anything that fails before
   the move leaves `:<app>` on the index it already held, and the job's
   last step says so: re-running the failed job publishes while the build
-  legs' carriers are kept (`retention-days: 1`), and after that the next
-  daily or push run does, unless the failing step names its own remedy: a
+  legs' carriers are kept (`retention-days: 1`), and after that the
+  button does at once and the next daily or push run does if its content
+  moved, unless the failing step names its own remedy: a
   failed anonymous fetch points at the package's settings, and a dry run
   showing another digest says a re-run meets the same. The publish
   decision reads only `:<app>`, so a staged index never counts as
