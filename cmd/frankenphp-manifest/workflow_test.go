@@ -272,45 +272,79 @@ var verifyFlags = []string{
 // scopes does not get (TestPublishPermissionsUnchanged).
 const createdByClock = `created=$(date -u +%Y-%m-%dT%H:%M:%SZ)`
 
+// packageSettings is where the owner makes the package public, which no
+// workflow can, and so the hint a failed anonymous fetch gives.
+const packageSettings = "https://github.com/orgs/divbast/packages/container/frankenphp/settings"
+
+// publishOnly is the if: of every publish step from the first push to the
+// move: each runs only when the decision says publish, and no failure
+// before it lets it run.
+const publishOnly = "steps.decide.outputs.publish == 'true'"
+
 // tagFlag matches an imagetools create -t or --tag, and the tag it names.
 var tagFlag = regexp.MustCompile(`(?:^|\s)(?:-t|--tag)(?:\s+|=)("[^"]*"|\S+)`)
 
 // TestPublishAttestsBeforePromote checks that the publish job moves
 // :<app> only once the index it moves it to is attested and that
 // attestation verifies, so a failure on the way leaves the tag where it
-// was and a re-run of the job publishes again:
+// was:
 //
 //   - the job pushes each architecture, stages the index under
 //     :<app>-staging alone, dated by createdByClock, attests the staged
-//     digest, verifies it as a file fetched by that digest and hashed
-//     back to it, moves :<app> to the digest from one source with no
-//     annotations, so the bytes and the digest stay the attested ones,
-//     and then checks the tag anonymously, in that order;
-//   - no other step names :<app> as a tag or as a destination;
-//   - a last step, run on a failure that came before the move, says no
-//     public tag moved and that re-running the failed job publishes.
+//     digest, verifies it as a file fetched anonymously by that digest
+//     and hashed back to it, up to three times, has buildx show the index
+//     the move would push and refuses one that is not the attested
+//     digest, moves :<app> to the digest from one source with no
+//     annotations, and then checks the tag anonymously, in that order;
+//   - every step from the push to the move runs only on publishOnly, and
+//     no step of the job sets continue-on-error:;
+//   - only the dry run and the move name :<app> as a tag, and every other
+//     line that names it is one of the decision's two reads or the
+//     anonymous check;
+//   - a last step, run on a failure that came before the move, says the
+//     app's tag did not move, and that re-running the failed job
+//     publishes while the carriers last and the next daily or push run
+//     after that, except where the failing step said a re-run cannot help.
 func TestPublishAttestsBeforePromote(t *testing.T) {
 	t.Parallel()
-	job := jobLines(readLines(t, ".github", "workflows", "build.yml"), "publish")
+	workflow := readLines(t, ".github", "workflows", "build.yml")
+	job := jobLines(workflow, "publish")
 	if job == nil {
 		t.Fatal("build.yml has no publish job")
 	}
 	steps := stepLines(job)
-	const fromStage = "DIGEST: ${{ steps.stage.outputs.digest }}"
+	const (
+		fromStage  = "DIGEST: ${{ steps.stage.outputs.digest }}"
+		lasting    = `echo "lasting=true" >> "${GITHUB_OUTPUT}"`
+		decideRead = `skopeo copy --all --quiet --src-no-creds "docker://${IMAGE}:${APP}" oci-archive:/tmp/published.tar`
+		dryRun     = `docker buildx imagetools create --dry-run -t "${IMAGE}:${APP}" "${IMAGE}@${DIGEST}" >/tmp/promote-index.json`
+		move       = `run: docker buildx imagetools create -t "${IMAGE}:${APP}" "${IMAGE}@${DIGEST}"`
+		checkRead  = `if ! pulled=$(skopeo inspect --raw --no-creds "docker://${IMAGE}:${APP}" | sha256sum) ||`
+	)
 
+	const (
+		push = iota
+		stage
+		attest
+		verify
+		keep
+		promote
+		check
+		note
+	)
 	order := []struct {
 		what string
 		find func([]string) bool
 		want []string
 	}{
-		{
+		push: {
 			"pushes each architecture",
 			func(s []string) bool {
 				return mentions(s, "skopeo copy") && mentions(s, `"docker://${IMAGE}:${APP}-${arch}"`)
 			},
 			nil,
 		},
-		{
+		stage: {
 			"stages the index",
 			hasID("stage"),
 			[]string{
@@ -319,37 +353,59 @@ func TestPublishAttestsBeforePromote(t *testing.T) {
 				createdByClock,
 			},
 		},
-		{
+		attest: {
 			"attests the staged index",
 			func(s []string) bool { return mentions(s, "uses: actions/attest@") },
 			[]string{"subject-name: ghcr.io/divbast/frankenphp", "subject-digest: ${{ steps.stage.outputs.digest }}", "push-to-registry: true"},
 		},
-		{
+		verify: {
 			"verifies the attestation",
 			hasID("verify"),
-			append([]string{
+			[]string{
 				fromStage,
-				`skopeo inspect --raw --no-creds "docker://${IMAGE}@${DIGEST}" >` + stagedIndex,
+				`if ! skopeo inspect --raw --no-creds "docker://${IMAGE}@${DIGEST}" >` + stagedIndex + `; then`,
+				lasting,
 				`if [ "sha256:${fetched%% *}" != "${DIGEST}" ]; then`,
-				`DOCKER_CONFIG="${empty}" gh attestation verify ` + stagedIndex,
-			}, verifyFlags...),
+				`for try in 1 2 3; do`,
+				`if DOCKER_CONFIG="${empty}" gh attestation verify ` + stagedIndex,
+				`sleep 10`,
+				// The last flag closes the retry loop's if.
+				verifyFlags[0],
+				verifyFlags[1],
+				verifyFlags[2] + "; then",
+			},
 		},
-		{
+		keep: {
+			"checks the move keeps the attested digest",
+			hasID("keep"),
+			[]string{
+				fromStage,
+				dryRun,
+				`would=$(head -c -1 /tmp/promote-index.json | sha256sum)`,
+				`if [ "sha256:${would%% *}" != "${DIGEST}" ]; then`,
+				lasting,
+			},
+		},
+		promote: {
 			"moves the tag",
 			hasID("promote"),
-			[]string{fromStage, `run: docker buildx imagetools create -t "${IMAGE}:${APP}" "${IMAGE}@${DIGEST}"`},
+			[]string{fromStage, move},
 		},
-		{
+		check: {
 			"checks the tag anonymously",
 			func(s []string) bool {
 				return mentions(s, `skopeo inspect --raw --no-creds "docker://${IMAGE}:${APP}"`)
 			},
-			[]string{fromStage},
+			[]string{fromStage, checkRead},
 		},
-		{
+		note: {
 			"says what a failure before the move left",
 			func(s []string) bool { return mentions(s, "steps.promote.outcome") },
-			[]string{"if: failure() && steps.decide.outputs.publish == 'true' && steps.promote.outcome == 'skipped'"},
+			[]string{
+				"if: failure() && " + publishOnly + " && steps.promote.outcome == 'skipped'",
+				"LASTING: ${{ steps.verify.outputs.lasting }}${{ steps.keep.outputs.lasting }}",
+				`if [ -z "${LASTING}" ]; then`,
+			},
 		},
 	}
 	at := make([]int, 0, len(order))
@@ -374,22 +430,52 @@ func TestPublishAttestsBeforePromote(t *testing.T) {
 		}
 		at, before = append(at, found[0]), o.what
 	}
-	if at[len(at)-1] != len(steps)-1 {
+	if at[note] != len(steps)-1 {
 		t.Error("the step that says what a failure left is not the publish job's last")
 	}
 
-	promote, last := steps[at[4]], steps[at[6]]
-	if mentions(promote, "--annotation") {
-		t.Error("the step that moves the tag passes --annotation, so buildx writes a new index with a digest nothing attested")
+	// A failure before the move must stop it: no step skips the decision's
+	// guard or lets a failure pass.
+	for i := at[push]; i <= at[promote]; i++ {
+		if got, _ := stepKey(steps[i], "if"); got != publishOnly {
+			t.Errorf("publish step %d (%s) runs on if: %q, not %q", i+1, strings.TrimSpace(steps[i][0]), got, publishOnly)
+		}
 	}
-	message := strings.Join(trimmed(last), "\n")
-	for _, want := range []string{"No public tag moved", "Re-running the failed job publishes"} {
+	for _, line := range trimmed(job) {
+		if strings.HasPrefix(line, "continue-on-error:") {
+			t.Errorf("the publish job sets %q, so a failed step can let :<app> move", line)
+		}
+	}
+
+	if !mentions(steps[at[verify]], packageSettings) {
+		t.Errorf("the verify step's failed anonymous fetch does not point the owner at %s", packageSettings)
+	}
+	if strings.Contains(strings.ToLower(strings.Join(steps[at[verify]], "\n")), "re-run") {
+		t.Error("the verify step's own messages say a re-run helps; its failures that one can are left to the last step")
+	}
+	message := strings.Join(trimmed(steps[at[note]]), "\n")
+	for _, want := range []string{
+		"The app's tag ${IMAGE}:${APP} didn't move",
+		"Re-running the failed job publishes",
+		"the next daily or push run publishes",
+	} {
 		if !strings.Contains(message, want) {
 			t.Errorf("the step that says what a failure left does not say %q", want)
 		}
 	}
+	// The note's day is how long the build legs keep the carriers.
+	build := stepLines(jobLines(workflow, "build"))
+	if len(build) == 0 || !hasLine(build[len(build)-1], "retention-days: 1") {
+		t.Error("the build legs keep their carriers for other than one day, which the failure note says")
+	}
 
-	// Which steps tag what, and which name :<app> as a destination.
+	// Which steps tag what, and which name :<app> at all.
+	known := map[string]int{
+		decideRead: slices.IndexFunc(steps, hasID("decide")),
+		dryRun:     at[keep],
+		move:       at[promote],
+		checkRead:  at[check],
+	}
 	for i, step := range steps {
 		var tags []string
 		for _, line := range step {
@@ -399,17 +485,20 @@ func TestPublishAttestsBeforePromote(t *testing.T) {
 		}
 		var want []string
 		switch i {
-		case at[1]:
+		case at[stage]:
 			want = []string{`"${IMAGE}:${APP}-staging"`}
-		case at[4]:
+		case at[keep], at[promote]:
 			want = []string{`"${IMAGE}:${APP}"`}
 		}
 		if !slices.Equal(tags, want) {
 			t.Errorf("publish step %d (%s) tags %q, not %q", i+1, strings.TrimSpace(step[0]), tags, want)
 		}
-		for _, line := range step {
-			if strings.Contains(line, `docker://${IMAGE}:${APP}"`) && !strings.Contains(line, "no-creds") {
-				t.Errorf("publish step %d (%s) writes to %s: %q", i+1, strings.TrimSpace(step[0]), "${IMAGE}:${APP}", strings.TrimSpace(line))
+		for _, line := range trimmed(step) {
+			if !strings.Contains(line, `${IMAGE}:${APP}"`) || strings.HasPrefix(line, "if ! published=$(.ci/bin/divbast-published-revision") {
+				continue
+			}
+			if where, ok := known[line]; !ok || where != i {
+				t.Errorf("publish step %d (%s) names %s outside the decision's reads, the dry run, the move and the anonymous check: %q", i+1, strings.TrimSpace(step[0]), "${IMAGE}:${APP}", line)
 			}
 		}
 	}
@@ -538,6 +627,25 @@ func jobMap(job []string, key string) map[string]string {
 		}
 	}
 	return out
+}
+
+// stepKey returns the value of the step's own key, trimmed, and whether
+// the step sets it.
+func stepKey(step []string, key string) (string, bool) {
+	keys := indent(step[0]) + 2
+	for i, line := range step {
+		trimmedLine := strings.TrimSpace(line)
+		switch {
+		case i == 0:
+			trimmedLine = strings.TrimPrefix(trimmedLine, "- ")
+		case indent(line) != keys:
+			continue
+		}
+		if value, ok := strings.CutPrefix(trimmedLine, key+":"); ok {
+			return strings.TrimSpace(value), true
+		}
+	}
+	return "", false
 }
 
 // stepWith returns the value of key in the with: of the step whose uses:

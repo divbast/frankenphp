@@ -316,10 +316,12 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ github.token }}
 
-      # From here to the verification, every step leaves :<app> where it
-      # was, so apps never see a digest with no attestation, and a re-run
-      # of this job decides against that tag and publishes again. The last
-      # step says so on a failure.
+      # From here to the move, a failure leaves the app's tag :<app> where
+      # it was, so apps never see a digest with no attestation, and the
+      # move runs only once every step before it passed. A re-run of this
+      # job decides against that tag and publishes again, while the build
+      # legs' carriers last; after that the next daily or push run does.
+      # The last step says so on a failure.
       # cmd/frankenphp-manifest/workflow_test.go holds the order.
 
       # Each to its own tag, which only feeds the index below
@@ -370,7 +372,10 @@ jobs:
       # What every app's CI runs before it builds on this digest, here
       # before any app can see it. The index's bytes come by digest, as an
       # anonymous client gets them, and must hash back to it; gh then
-      # verifies that file, and never reads a registry login.
+      # verifies that file, and never reads a registry login. The
+      # attestation was written seconds ago, so gh gets three tries, ten
+      # seconds apart. A failure that a re-run cannot mend sets lasting,
+      # so the last step does not say one will.
       - name: Verify the attestation as apps do
         if: steps.decide.outputs.publish == 'true'
         id: verify
@@ -378,17 +383,48 @@ jobs:
           DIGEST: ${{ steps.stage.outputs.digest }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          skopeo inspect --raw --no-creds "docker://${IMAGE}@${DIGEST}" >/tmp/staged-index.json
+          if ! skopeo inspect --raw --no-creds "docker://${IMAGE}@${DIGEST}" >/tmp/staged-index.json; then
+            echo "lasting=true" >> "${GITHUB_OUTPUT}"
+            echo "::error::${IMAGE}@${DIGEST} is not anonymously pullable, so the app's tag ${IMAGE}:${APP} didn't move. If the package is private, as its first push can leave it, the owner makes it public in its settings (https://github.com/orgs/divbast/packages/container/frankenphp/settings); nothing in this workflow can."
+            exit 1
+          fi
           fetched=$(sha256sum /tmp/staged-index.json)
           if [ "sha256:${fetched%% *}" != "${DIGEST}" ]; then
             echo "::error::${IMAGE}@${DIGEST} came back as bytes that hash to sha256:${fetched%% *}."
             exit 1
           fi
           empty=$(mktemp -d)
-          DOCKER_CONFIG="${empty}" gh attestation verify /tmp/staged-index.json \
-            --repo divbast/frankenphp \
-            --signer-workflow divbast/frankenphp/.github/workflows/build.yml@refs/heads/main \
-            --source-ref refs/heads/main
+          for try in 1 2 3; do
+            if DOCKER_CONFIG="${empty}" gh attestation verify /tmp/staged-index.json \
+              --repo divbast/frankenphp \
+              --signer-workflow divbast/frankenphp/.github/workflows/build.yml@refs/heads/main \
+              --source-ref refs/heads/main; then
+              exit 0
+            fi
+            if [ "${try}" -lt 3 ]; then
+              sleep 10
+            fi
+          done
+          echo "::error::gh did not verify the attestation of ${IMAGE}@${DIGEST} in three tries, ten seconds apart."
+          exit 1
+
+      # buildx shows the index the move would push, then a newline. Only
+      # the attested bytes may go under :<app>, so anything else stops the
+      # move before it runs, rather than the anonymous check finding it
+      # after the tag has moved.
+      - name: Check the move keeps the attested digest
+        if: steps.decide.outputs.publish == 'true'
+        id: keep
+        env:
+          DIGEST: ${{ steps.stage.outputs.digest }}
+        run: |
+          docker buildx imagetools create --dry-run -t "${IMAGE}:${APP}" "${IMAGE}@${DIGEST}" >/tmp/promote-index.json
+          would=$(head -c -1 /tmp/promote-index.json | sha256sum)
+          if [ "sha256:${would%% *}" != "${DIGEST}" ]; then
+            echo "lasting=true" >> "${GITHUB_OUTPUT}"
+            echo "::error::Moving ${IMAGE}:${APP} would push an index that hashes to sha256:${would%% *}, not the attested ${DIGEST}, so the app's tag didn't move. buildx no longer copies a single index unchanged; a re-run would meet the same."
+            exit 1
+          fi
 
       # One source and no annotations, so buildx pushes the staged index's
       # own bytes under :<app>, and the digest stays the one just verified.
@@ -414,8 +450,16 @@ jobs:
           fi
           echo "${IMAGE}:${APP} is ${DIGEST} to an anonymous client"
 
-      # A step before the move failed, so the move never ran.
+      # A step before the move failed, so the move never ran. The
+      # carriers a re-run needs last as long as the build legs' upload
+      # keeps them, a day.
       - name: Say what the failure left
         if: failure() && steps.decide.outputs.publish == 'true' && steps.promote.outcome == 'skipped'
+        env:
+          LASTING: ${{ steps.verify.outputs.lasting }}${{ steps.keep.outputs.lasting }}
         run: |
-          echo "::error::No public tag moved: ${IMAGE}:${APP} still names the index it named before this run. Re-running the failed job publishes."
+          note="The app's tag ${IMAGE}:${APP} didn't move: it still names the index it named before this run."
+          if [ -z "${LASTING}" ]; then
+            note+=" Re-running the failed job publishes within a day of the build, while its carriers are kept; after that, the next daily or push run publishes."
+          fi
+          echo "::error::${note}"

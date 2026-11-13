@@ -186,10 +186,12 @@ that app's publish, before it pushes anything, while the other app's goes
 ahead; the run still fails, as a pull request with that failure does.
 
 `:<app>` moves last. A publish pushes the new index as `:<app>-staging`,
-attests it, and verifies that attestation the way apps do, and only then
-points `:<app>` at the same digest. A publish that fails before that leaves
-`:<app>` on the index it already held, and re-running the failed job
-publishes.
+attests it, verifies that attestation the way apps do, and checks that
+moving the tag keeps the digest; only then does it point `:<app>` at that
+digest. A publish that fails before then leaves `:<app>` on the index it
+already held, though the staging and per-architecture tags may have moved.
+Re-running the failed job publishes for a day after the build, while its
+carriers are kept; after that, the next daily or push run publishes.
 
 ## Working here
 
