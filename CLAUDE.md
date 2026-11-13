@@ -126,7 +126,10 @@ this project's one record of LLM involvement.
   `cmd/frankenphp-manifest/workflow_test.go` pins the condition and runs
   the decide step for every event against stubs. `stall.yml`'s slots jobs
   pass `content-gated: true`, without which a successful slot that left an
-  older commit published counts as lost
+  older commit published counts as lost, and `slot-job: publish (<app>)`,
+  which reads that app's publish job in the slot run, not the whole run's
+  conclusion, so a leg that failed for the other app is not this app's
+  lost slot
 - **The manifest holds how the binary was built, not only what it holds.**
   `spc`, `builder`, `craft` and `recipe` (schema 3) catch what the binary
   does not report: an spc bump, a builder bump with the same FrankenPHP,

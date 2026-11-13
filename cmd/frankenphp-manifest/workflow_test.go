@@ -184,16 +184,14 @@ func TestRecipeHashCoversBothFiles(t *testing.T) {
 	}
 }
 
-// TestStallSlotsContentGated checks that every job of the stall workflow
-// that runs its slots check passes content-gated: true. The publish job
-// gates each publish on its content, so a daily slot can succeed and leave
-// an older commit published; without the input, stall counts each such
-// slot as lost and fails two days after any merge that left the binary as
-// it was.
-func TestStallSlotsContentGated(t *testing.T) {
-	t.Parallel()
-	workflow := readLines(t, ".github", "workflows", "stall.yml")
-	var slots []string
+// slotsProblems reports every way a job of the stall workflow that runs
+// its slots check fails to pass content-gated: true and slot-job, the
+// publish job's name in that app's slot run, "publish (<tag>)" for the
+// image published as frankenphp:<tag> (FP-3, backlog). Without slot-job,
+// stall reads the whole run's conclusion, and a leg that failed for
+// another app fails this app's slot. It returns the number of slots jobs
+// it found, to be told from none.
+func slotsProblems(workflow []string) (problems []string, slots int) {
 	for _, name := range mappingKeys(topLevel(workflow, "jobs"), 2) {
 		job := jobLines(workflow, name)
 		at := slices.IndexFunc(job, func(line string) bool { return strings.HasPrefix(strings.TrimSpace(line), "uses: ") })
@@ -204,13 +202,58 @@ func TestStallSlotsContentGated(t *testing.T) {
 		if !strings.Contains(checks, `"slots"`) {
 			continue
 		}
-		slots = append(slots, name)
+		slots++
 		if gated, ok := stepWith(job, at, "content-gated"); !ok || gated != "true" {
-			t.Errorf("stall.yml's %s job runs the slots check with content-gated: %q, not true", name, gated)
+			problems = append(problems, fmt.Sprintf("stall.yml's %s job runs the slots check with content-gated: %q, not true", name, gated))
+		}
+		published, _ := stepWith(job, at, "published")
+		_, tag, _ := strings.Cut(published, "ghcr.io/divbast/frankenphp:")
+		want := "publish (" + tag + ")"
+		if tag == "" {
+			problems = append(problems, fmt.Sprintf("stall.yml's %s job publishes %q, not ghcr.io/divbast/frankenphp:<tag>", name, published))
+		}
+		if got, _ := stepWith(job, at, "slot-job"); strings.Trim(got, `"'`) != want {
+			problems = append(problems, fmt.Sprintf("stall.yml's %s job runs the slots check with slot-job: %q, not %q", name, got, want))
 		}
 	}
-	if len(slots) == 0 {
-		t.Fatal("stall.yml has no job that runs the slots check")
+	return problems, slots
+}
+
+// TestStallSlotsContentGated checks that every job of the stall workflow
+// that runs its slots check passes content-gated: true and its own
+// publish job as slot-job, as slotsProblems reads them. The publish job
+// gates each publish on its content, so a daily slot can succeed and leave
+// an older commit published; without content-gated, stall counts each such
+// slot as lost and fails two days after any merge that left the binary as
+// it was. Against stall.yml as it is, then with each change below, which
+// the check must refuse.
+func TestStallSlotsContentGated(t *testing.T) {
+	t.Parallel()
+	text := strings.Join(readLines(t, ".github", "workflows", "stall.yml"), "\n")
+	problems, slots := slotsProblems(strings.Split(text, "\n"))
+	if slots != 2 {
+		t.Fatalf("stall.yml has %d jobs that run the slots check, not 2", slots)
+	}
+	for _, problem := range problems {
+		t.Error(problem)
+	}
+	for name, mutant := range map[string]string{
+		"no slot-job for baikal":       strings.Replace(text, "      slot-job: publish (baikal)\n", "", 1),
+		"no slot-job for librespeed":   strings.Replace(text, "      slot-job: publish (librespeed)\n", "", 1),
+		"another app's slot-job":       strings.Replace(text, "slot-job: publish (baikal)", "slot-job: publish (librespeed)", 1),
+		"the matrix job's raw name":    strings.Replace(text, "slot-job: publish (baikal)", "slot-job: publish (${{ matrix.app }})", 1),
+		"content-gated off, baikal":    strings.Replace(text, "      content-gated: true\n", "", 1),
+		"content-gated false, a slots": strings.Replace(text, "content-gated: true", "content-gated: false", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if mutant == text {
+				t.Fatal("the change changed nothing")
+			}
+			if got, _ := slotsProblems(strings.Split(mutant, "\n")); len(got) == 0 {
+				t.Error("passes stall.yml with " + name)
+			}
+		})
 	}
 }
 

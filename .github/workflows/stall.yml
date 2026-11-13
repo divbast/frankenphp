@@ -49,6 +49,9 @@ jobs:
       # build.yml publishes only when the binary's content moved, so a
       # slot that succeeded and left an older commit published is not lost.
       content-gated: true
+      # Read that publish job's conclusion in the slot run, not the whole
+      # run's: a leg that failed for the other app is not this app's loss.
+      slot-job: publish (baikal)
     permissions:
       contents: read # read main, compare commits, the repository's age
       pull-requests: read # list Renovate's pull requests
@@ -64,6 +67,7 @@ jobs:
       checks: '["slots"]'
       published: ghcr.io/divbast/frankenphp:librespeed
       content-gated: true
+      slot-job: publish (librespeed)
     permissions:
       contents: read # read main, compare commits, the repository's age
       pull-requests: read # list Renovate's pull requests
