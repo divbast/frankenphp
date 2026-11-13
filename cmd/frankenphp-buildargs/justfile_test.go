@@ -21,8 +21,9 @@ import (
 // its engine, for each kind of token GITHUB_TOKEN can hold. Every build
 // script spc runs can read the token, so the recipe takes only a
 // fine-grained personal access token (github_pat_) or the job token
-// Actions issues (ghs_). It refuses anything else before the engine runs,
-// in one line that names the kind it saw and never the token.
+// Actions issues (ghs_). divbast/ci's shared _github-token recipe, which
+// build-app runs first, refuses anything else before the engine runs, in
+// one line that names the kind it saw and never the token.
 func TestBuildAppTakesOnlyAFineGrainedOrCIToken(t *testing.T) {
 	t.Parallel()
 
@@ -33,6 +34,10 @@ func TestBuildAppTakesOnlyAFineGrainedOrCIToken(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
+	}
+	// _github-token is divbast/ci's, imported from its checkout
+	if _, statErr := os.Stat(filepath.Join(root, ".ci", "just", "common.just")); statErr != nil {
+		t.Fatalf("build-app's token check is divbast/ci's, and .ci has none; run `just ci-checkout`: %v", statErr)
 	}
 	engine, err := filepath.Abs(filepath.Join("testdata", "engine.sh"))
 	if err != nil {
@@ -55,9 +60,10 @@ func TestBuildAppTakesOnlyAFineGrainedOrCIToken(t *testing.T) {
 		{name: "classic", prefix: "ghp_", refused: "a classic personal access token (ghp_)"},
 		{name: "app-user", prefix: "ghu_", refused: "a GitHub App user token (ghu_)"},
 		// A token from before GitHub's tokens carried a prefix
-		{name: "unknown", prefix: "0123456789abcdef", refused: "a token of no kind this knows"},
-		{name: "empty", refused: "empty"},
-		{name: "unset", unset: true, refused: "empty"},
+		{name: "app-refresh", prefix: "ghr_", refused: "a GitHub App refresh token (ghr_)"},
+		{name: "unknown", prefix: "0123456789abcdef", refused: "not a GitHub token of any known kind"},
+		{name: "empty", refused: "unset or empty"},
+		{name: "unset", unset: true, refused: "unset or empty"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -103,13 +109,13 @@ func TestBuildAppTakesOnlyAFineGrainedOrCIToken(t *testing.T) {
 				}
 				var lines []string
 				for line := range strings.Lines(stderr.String()) {
-					if strings.HasPrefix(line, "build-app: ") {
+					if strings.HasPrefix(line, "GITHUB_TOKEN is ") {
 						lines = append(lines, line)
 					}
 				}
-				if len(lines) != 1 || !strings.Contains(lines[0], "GITHUB_TOKEN is "+tt.refused+",") ||
-					!strings.Contains(lines[0], `README.md, "A token for local builds"`) {
-					t.Errorf("stderr = %q, want one build-app line naming %q and the README section", stderr.String(), tt.refused)
+				if len(lines) != 1 || !strings.Contains(lines[0], "GITHUB_TOKEN is "+tt.refused+";") ||
+					!strings.Contains(lines[0], "https://github.com/divbast/ci#local-github-token") {
+					t.Errorf("stderr = %q, want one line naming %q and ci's README section", stderr.String(), tt.refused)
 				}
 				return
 			}

@@ -21,6 +21,7 @@
 //     APP, which the build passes;
 //   - the key is everything before the first "=", and the value everything
 //     after it, verbatim and possibly empty;
+//   - EXPECTED_EXTENSIONS not empty, the others possibly;
 //   - no `"` anywhere, and no whitespace at either end of a key or a value;
 //   - lines that are blank, or start with "#", are skipped;
 //   - the last line is read whether or not a newline ends it.
@@ -57,6 +58,10 @@ var (
 	ErrDuplicate = errors.New("set more than once")
 	// ErrMissing is a key never set.
 	ErrMissing = errors.New("never set")
+	// ErrEmpty is EXPECTED_EXTENSIONS set to nothing. The build declares it
+	// only after the binary's long build, where extensions.sh would refuse
+	// it, so this is the only refusal before the build starts.
+	ErrEmpty = errors.New("is empty; it must name every module the binary loads")
 	// ErrQuote is a line holding a `"`, which would reach the build as part
 	// of the value.
 	ErrQuote = errors.New(`holds a " character, which the build would take as part of the value`)
@@ -124,6 +129,9 @@ func Parse(name string, data []byte) (Inputs, error) {
 		default:
 			setOn[key] = number
 			*field = value
+			if key == "EXPECTED_EXTENSIONS" && value == "" {
+				errs = append(errs, fmt.Errorf("%s: %w", at, ErrEmpty))
+			}
 		}
 	}
 	for _, key := range keys {

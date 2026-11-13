@@ -106,7 +106,7 @@ RUN set -eux; \
 # Declared after the steps every app shares: RUN sees each ARG as an
 # environment variable, so each would otherwise give those layers a cache
 # key per app. Every RUN below sees them, and the checks read their inputs
-# from them.
+# from them, but for the two that only extensions.sh reads (see below).
 ARG PHP_VERSION
 ARG CADDY_VERSION
 ARG CBROTLI_VERSION
@@ -115,14 +115,11 @@ ARG VULCAIN_VERSION
 ARG APP
 ARG PHP_EXTENSIONS
 ARG PHP_EXTENSION_LIBS
-ARG EXPECTED_EXTENSIONS
-ARG REQUIRED_GD_FEATURES
 # Left empty, build-static.sh would quietly build craft.yml's own extension
 # and library lists. Fail now rather than after the long build.
 RUN : "${APP:?is empty: pass apps/<app>.env as build arguments, as just build-app does}" \
     "${PHP_EXTENSIONS:?is empty: apps/<app>.env sets it}" \
-    "${PHP_EXTENSION_LIBS:?is empty: apps/<app>.env sets it}" \
-    "${EXPECTED_EXTENSIONS:?is empty: apps/<app>.env sets it}"
+    "${PHP_EXTENSION_LIBS:?is empty: apps/<app>.env sets it}"
 # The plugins go through XCADDY_ARGS, which build-static.sh writes into
 # craft.yml. spc applies craft.yml's extra-env over the environment, so
 # SPC_CMD_VAR_FRANKENPHP_XCADDY_MODULES set here would lose to its unversioned
@@ -163,6 +160,14 @@ RUN SPC_SRC=/opt/static-php-cli \
     SPC_CALLS=/go/src/app/dist/spc.calls \
     SPC_CLONE=/go/src/app/dist/static-php-cli \
     /tmp/pinned-spc.sh
+# What the binary should hold is checked, not built from, so these two are
+# declared only now: an ARG puts its value in the cache key of every step
+# after it, and declared above the build, an edit to either would rebuild
+# the binary to rerun this one check. cmd/frankenphp-buildargs refuses an
+# app file whose EXPECTED_EXTENSIONS is missing or empty before the build
+# starts, and extensions.sh refuses it too.
+ARG EXPECTED_EXTENSIONS
+ARG REQUIRED_GD_FEATURES
 COPY --chmod=0755 build/extensions.sh /tmp/extensions.sh
 RUN FRANKENPHP_BIN=/go/src/app/dist/frankenphp /tmp/extensions.sh
 

@@ -97,16 +97,32 @@ both build through it.
 The pins do not fix every input. spc chooses these while the build runs:
 
 - the Go toolchain: the newest release go.dev lists;
-- brotli, freetype, libavif, libjpeg, libpng, libwebp, libxml2, onig,
-  openssl, watcher, xz and zlib: the newest GitHub release or tag that
-  matches spc's rule for each;
-- libiconv: the newest in GNU's file listing.
+- the C libraries each app builds that spc takes from the newest GitHub
+  release or tag that matches its rule for each, or from GNU's file
+  listing for libiconv:
+  - Baikal: brotli, libiconv, libxml2, onig, openssl, watcher, xz and
+    zlib;
+  - LibreSpeed: brotli, freetype, libavif, libiconv, libjpeg, libpng,
+    libwebp, libxml2, openssl, watcher, xz and zlib.
 
-Of the libraries the two apps build, libaom comes from the tag above
-instead, and sqlite and bzip2 from fixed URLs in spc's config. A rebuild
-of an unchanged commit can therefore hold newer code in the others, which
-is how their fixes arrive. The manifest below records each of these
-inputs, so the daily rebuild publishes when one moves.
+Of the libraries the two apps build, libaom (LibreSpeed's) comes from the
+tag above instead, and sqlite (both) and bzip2 (LibreSpeed's) from fixed
+URLs in spc's config. bzip2's config also names a `source-mirror`,
+sourceware's directory listing, which spc falls back on only when the
+primary URL fails; the mirror takes the newest `bzip2-*.tar.gz` it lists,
+so a bzip2 build that quietly changed version would mean the primary URL
+failed. A rebuild of an unchanged commit can therefore hold newer code in
+the floating libraries, which is how their fixes arrive. The manifest
+below records each of these inputs, so the daily rebuild publishes when
+one moves.
+
+These lists were read on 2026-11-13 from the published carriers'
+`spc-cache.json` records and, for bzip2's mirror, spc's config at the
+pinned commit `3ba9ffa`. Nothing checks them: they change when spc's
+config or an app's extensions do, and are regenerated from a carrier's
+records (`docker create` the carrier, `docker cp` its `/records`, and read
+each library's `config.type` in `spc-cache.json`: `ghrel`, `ghtar`,
+`ghtagtar` and `filelist` float; `url` and `git` with a tag are fixed).
 
 sqlite stays at 3.45.2, the release spc's config names. Every
 `sqlite-autoconf` archive since 3.49 configures with autosetup, which
@@ -268,9 +284,10 @@ own gh commands would start using the read-only token.
 `just build-app` takes a token only when it starts with `github_pat_`, a
 fine-grained personal access token, or `ghs_`, the job token Actions
 issues, and refuses any other kind, gh's own `gho_` among them, naming the
-kind it saw without printing the token. The prefix shows the kind, not the
-token's access. CI's build job passes its own read-only `ghs_` token to the
-build directly, not through `just build-app`.
+kind it saw without printing the token. The check is divbast/ci's shared
+`_github-token` recipe, which `build-app` runs first. The prefix shows the
+kind, not the token's access. CI's build job passes its own read-only
+`ghs_` token to the build directly, not through `just build-app`.
 
 ## Licence
 

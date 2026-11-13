@@ -460,6 +460,19 @@ func TestExtensions(t *testing.T) {
 			want: []string{"names gd,", "FreeType Support", "PNG Support"},
 		},
 		{
+			name: "gd-features-padded",
+			set:  map[string]string{"REQUIRED_GD_FEATURES": " FreeType Support , PNG Support "},
+		},
+		{
+			name: "gd-features-empty-items",
+			set:  map[string]string{"REQUIRED_GD_FEATURES": ",FreeType Support,, ,PNG Support,"},
+		},
+		{
+			name: "gd-features-padded-missing",
+			set:  map[string]string{"REQUIRED_GD_FEATURES": " FreeType Support , Nonesuch Support "},
+			want: []string{"gd_info() reports no Nonesuch Support,"},
+		},
+		{
 			name:  "expected-unset",
 			unset: []string{"EXPECTED_EXTENSIONS"},
 			want:  []string{"EXPECTED_EXTENSIONS is empty"},

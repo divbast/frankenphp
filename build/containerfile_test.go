@@ -63,3 +63,49 @@ func TestContainerfileRecipeOnlyInRecords(t *testing.T) {
 		t.Errorf("the Containerfile names RECIPE_SHA256 in %q, want only %q", named, want)
 	}
 }
+
+// TestContainerfileExpectationsAfterBuild holds EXPECTED_EXTENSIONS and
+// REQUIRED_GD_FEATURES to the line between the build and the check that
+// reads them. They are inputs of extensions.sh alone: declared before the
+// build RUN, an edit to either would give the binary's build a new cache
+// key and rebuild it, to rerun a check. Declared in the stage again after
+// the RUN, they reach extensions.sh, which a build test in checks_test.go
+// cannot see, since it passes the environment itself.
+func TestContainerfileExpectationsAfterBuild(t *testing.T) {
+	t.Parallel()
+
+	lines := strings.Split(read(t, "../Containerfile"), "\n")
+	at := func(prefix string) int {
+		t.Helper()
+		found := -1
+		for i, line := range lines {
+			if strings.HasPrefix(line, prefix) {
+				if found >= 0 {
+					t.Fatalf("Containerfile has %q at lines %d and %d, want once", prefix, found+1, i+1)
+				}
+				found = i
+			}
+		}
+		if found < 0 {
+			t.Fatalf("Containerfile has no line starting %q", prefix)
+		}
+		return found
+	}
+
+	built := at("    /go/src/app/build-static.sh")
+	checked := at("RUN FRANKENPHP_BIN=/go/src/app/dist/frankenphp /tmp/extensions.sh")
+	for _, arg := range []string{"ARG EXPECTED_EXTENSIONS", "ARG REQUIRED_GD_FEATURES"} {
+		if i := at(arg); i <= built || i >= checked {
+			t.Errorf("Containerfile:%d: %s must come after the build (line %d) and before extensions.sh runs (line %d)", i+1, arg, built+1, checked+1)
+		}
+	}
+	// Anything before extensions.sh that names them reads an empty value.
+	for i, line := range lines[:checked] {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") || strings.HasPrefix(line, "ARG ") {
+			continue
+		}
+		if strings.Contains(line, "EXPECTED_EXTENSIONS") || strings.Contains(line, "REQUIRED_GD_FEATURES") {
+			t.Errorf("Containerfile:%d reads an input declared later: %s", i+1, strings.TrimSpace(line))
+		}
+	}
+}
