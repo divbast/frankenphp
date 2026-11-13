@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -264,10 +265,12 @@ var verifyFlags = []string{
 	"--source-ref refs/heads/main",
 }
 
-// createdFromRun is how the staged index's created annotation is dated:
-// by when the run, or this attempt at it, started. The commit's time would
-// date a daily republish of an unchanged commit by that commit.
-const createdFromRun = `created=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq .run_started_at)`
+// createdByClock is how the staged index's created annotation is dated:
+// by the clock as the publish job stages it. The commit's time would date
+// a daily republish of an unchanged commit by that commit, and the run's
+// own start time would take actions: read, which a job holding write
+// scopes does not get (TestPublishPermissionsUnchanged).
+const createdByClock = `created=$(date -u +%Y-%m-%dT%H:%M:%SZ)`
 
 // tagFlag matches an imagetools create -t or --tag, and the tag it names.
 var tagFlag = regexp.MustCompile(`(?:^|\s)(?:-t|--tag)(?:\s+|=)("[^"]*"|\S+)`)
@@ -278,7 +281,7 @@ var tagFlag = regexp.MustCompile(`(?:^|\s)(?:-t|--tag)(?:\s+|=)("[^"]*"|\S+)`)
 // was and a re-run of the job publishes again:
 //
 //   - the job pushes each architecture, stages the index under
-//     :<app>-staging alone, dated by createdFromRun, attests the staged
+//     :<app>-staging alone, dated by createdByClock, attests the staged
 //     digest, verifies it as a file fetched by that digest and hashed
 //     back to it, moves :<app> to the digest from one source with no
 //     annotations, so the bytes and the digest stay the attested ones,
@@ -313,7 +316,7 @@ func TestPublishAttestsBeforePromote(t *testing.T) {
 			[]string{
 				`-t "${IMAGE}:${APP}-staging"`,
 				`echo "digest=${digest}" >> "${GITHUB_OUTPUT}"`,
-				createdFromRun,
+				createdByClock,
 			},
 		},
 		{
@@ -412,6 +415,28 @@ func TestPublishAttestsBeforePromote(t *testing.T) {
 	}
 }
 
+// publishPermissions is all the publish job holds, as it held before it
+// attested before promoting: a job with write scopes gets nothing more.
+var publishPermissions = map[string]string{
+	"contents":     "read",
+	"packages":     "write",
+	"id-token":     "write",
+	"attestations": "write",
+}
+
+// TestPublishPermissionsUnchanged checks that the publish job's
+// permissions: are exactly publishPermissions.
+func TestPublishPermissionsUnchanged(t *testing.T) {
+	t.Parallel()
+	job := jobLines(readLines(t, ".github", "workflows", "build.yml"), "publish")
+	if job == nil {
+		t.Fatal("build.yml has no publish job")
+	}
+	if got := jobMap(job, "permissions"); !maps.Equal(got, publishPermissions) {
+		t.Errorf("the publish job's permissions are %v, not %v", got, publishPermissions)
+	}
+}
+
 // The shared Renovate managers' patterns for the two build tools the
 // workflow pins (divbast/renovate-config's default.json, customManagers),
 // as Renovate reads them: a pin in any other shape is one Renovate never
@@ -484,6 +509,35 @@ func jobKey(job []string, key string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// jobMap returns the entries of the job's own key, a mapping one indent
+// below the job's name, each value without its comment, or the key's
+// value under its own name when it is written on one line.
+func jobMap(job []string, key string) map[string]string {
+	out := map[string]string{}
+	open := false
+	for _, line := range job[1:] {
+		trimmedLine := strings.TrimSpace(line)
+		switch {
+		case trimmedLine == "" || strings.HasPrefix(trimmedLine, "#"):
+		case indent(line) <= 4 && open:
+			return out
+		case indent(line) == 4:
+			if value, ok := strings.CutPrefix(trimmedLine, key+":"); ok {
+				if value = strings.TrimSpace(value); value != "" {
+					out[key] = value
+					return out
+				}
+				open = true
+			}
+		case open:
+			k, v, _ := strings.Cut(trimmedLine, ":")
+			v, _, _ = strings.Cut(v, " #")
+			out[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		}
+	}
+	return out
 }
 
 // stepWith returns the value of key in the with: of the step whose uses:

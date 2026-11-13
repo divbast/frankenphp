@@ -142,8 +142,11 @@ this project's one record of LLM involvement.
   bytes and digest. Anything that fails before the move leaves `:<app>` on
   the index it already held, and the job's last step says so: re-running
   the failed job publishes. The publish decision reads only `:<app>`, so a
-  staged index never counts as published.
-  `cmd/frankenphp-manifest/workflow_test.go` holds the order
+  staged index never counts as published. The job's permissions stay
+  `contents: read` and `packages`, `id-token` and `attestations: write`;
+  `created` comes from the clock, not the run's API record, which would
+  take `actions: read`. `cmd/frankenphp-manifest/workflow_test.go` holds
+  the order and the permissions
 - **BuildKit and mise are pinned in `build.yml`**, BuildKit by digest in
   each `docker/setup-buildx-action`'s `driver-opts`, mise as the
   workflow's `MISE_VERSION`, which every `jdx/mise-action` step passes as

@@ -29,9 +29,9 @@ base, such as `gcr.io/distroless/cc-debian13`, never on scratch. It carries
 no file capability, so it runs under `--cap-drop ALL`.
 
 Each index's `org.opencontainers.image.revision` annotation is the commit
-it was built from, and `org.opencontainers.image.created` the time its run
-started, which for a daily republish of an unchanged commit is later than
-the commit.
+it was built from, and `org.opencontainers.image.created` the time its
+publish job made it, which for a daily republish of an unchanged commit is
+later than the commit.
 
 ## Using a binary
 
