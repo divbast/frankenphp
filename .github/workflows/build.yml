@@ -41,7 +41,7 @@ permissions: {}
 # moves it.
 env:
   # renovate: datasource=github-releases depName=jdx/mise
-  MISE_VERSION: 2026.11.7
+  MISE_VERSION: 2026.11.8
 
 # GitHub keeps one pending run per group, and a newer one replaces it. The
 # event in the group stops a push run replacing a pending daily or button
