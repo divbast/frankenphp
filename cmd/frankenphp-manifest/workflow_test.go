@@ -4,9 +4,12 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -42,6 +45,55 @@ func TestWorkflowComparesOnlyForTheDailyRebuild(t *testing.T) {
 		if got := enclosingIf(lines, at[0]); got != manifestGuard {
 			t.Errorf("build.yml:%d (%s) sits inside %q, not %q", at[0]+1, marker, got, manifestGuard)
 		}
+	}
+}
+
+// recipeLine is how the build hashes the recipe, the Containerfile and
+// then the app's own file as one stream, and recipeArg how it passes
+// sha256sum's hash, without the file name after it, to the records stage.
+const (
+	recipeLine = `recipe=$(cat Containerfile "apps/${APP}.env" | sha256sum)`
+	recipeArg  = `--build-arg "RECIPE_SHA256=${recipe%% *}"`
+)
+
+// TestRecipeHashCoversBothFiles checks that the build workflow's build
+// step hashes the recipe with recipeLine and passes it with recipeArg, and
+// runs recipeLine for each app, checking that it gives the sha256 of the
+// Containerfile followed by apps/<app>.env: an edit to either is then a
+// content change.
+func TestRecipeHashCoversBothFiles(t *testing.T) {
+	t.Parallel()
+	steps := stepLines(jobLines(readLines(t, ".github", "workflows", "build.yml"), "build"))
+	at := slices.IndexFunc(steps, func(step []string) bool { return hasLine(step, "- name: Build the carrier") })
+	if at < 0 {
+		t.Fatal("build.yml's build job has no step named Build the carrier")
+	}
+	if !hasLine(steps[at], recipeLine) {
+		t.Errorf("the build step does not hash the recipe as %s", recipeLine)
+	}
+	if !mentions(steps[at], recipeArg) {
+		t.Errorf("the build step does not pass the recipe as %s", recipeArg)
+	}
+
+	root := filepath.Join("..", "..")
+	containerfile := readFile(t, filepath.Join(root, "Containerfile"))
+	seen := map[string]string{}
+	for _, app := range []string{"baikal", "librespeed"} {
+		cmd := exec.CommandContext(t.Context(), "/bin/bash", "-euo", "pipefail", "-c", recipeLine+`; printf '%s' "${recipe%% *}"`)
+		cmd.Dir = root
+		cmd.Env = []string{"PATH=" + systemPath, "APP=" + app}
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("%s for %s: %v", recipeLine, app, err)
+		}
+		sum := sha256.Sum256([]byte(containerfile + readFile(t, filepath.Join(root, "apps", app+".env"))))
+		if want := hex.EncodeToString(sum[:]); string(out) != want {
+			t.Errorf("the recipe of %s hashes to %q, not %s, the sha256 of the Containerfile and apps/%s.env", app, out, want, app)
+		}
+		seen[string(out)] = app
+	}
+	if len(seen) != 2 {
+		t.Errorf("both apps' recipes hash to one value, %q", slices.Collect(maps.Keys(seen)))
 	}
 }
 

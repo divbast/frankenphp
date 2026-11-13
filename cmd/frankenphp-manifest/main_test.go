@@ -100,9 +100,25 @@ func xcaddyMoved(img *manifesttest.Image) {
 		[]byte("xcaddy\tv0.4.7\t"), []byte("xcaddy\tv0.4.8-0.20261112093000-0123456789ab\t"), 1)
 }
 
-// unrecorded is a carrier from before the build recorded xcaddy.
+// schema2 is a carrier from before schema 3, as every carrier published
+// before it is: it lacks the records schema 3 added.
+func schema2(img *manifesttest.Image) {
+	for _, name := range []string{"spc.txt", "builder.txt", "craft.yml", "recipe.txt"} {
+		delete(img.Records, name)
+	}
+}
+
+// unrecorded is a carrier from before the build recorded xcaddy, which
+// lacks schema 3's records too.
 func unrecorded(img *manifesttest.Image) {
+	schema2(img)
 	delete(img.Records, "xcaddy.txt")
+}
+
+// garbled is a carrier with every record, one of which this commit
+// cannot read.
+func garbled(img *manifesttest.Image) {
+	img.Records["version.txt"] = []byte("FrankenPHP, but not as this reads it\n")
 }
 
 func capability(img *manifesttest.Image) {
@@ -328,10 +344,20 @@ func TestRunChanges(t *testing.T) {
 				"arm64: xcaddy: v0.4.7 → v0.4.8-0.20261112093000-0123456789ab\n",
 		},
 		{
-			// Refused, as any published carrier missing a record is: the
-			// daily run compares only a published image built from main's
-			// own commit, and every one built since xcaddy is recorded
-			// holds it.
+			// Every carrier published before schema 3: a change, so that
+			// the first build that records schema 3 publishes
+			name: "published-schema-2",
+			args: func(f fixture) []string {
+				return []string{
+					"-changes", "-app", "librespeed", "-published", f.published("librespeed", schema2, "amd64", "arm64"),
+					"amd64=" + f.carrier("librespeed", "amd64", nil), "arm64=" + f.carrier("librespeed", "arm64", nil),
+				}
+			},
+			wantCode: 0,
+			wantStdout: "amd64: published manifest unreadable (schema 2)\n" +
+				"arm64: published manifest unreadable (schema 2)\n",
+		},
+		{
 			name: "published-without-xcaddy",
 			args: func(f fixture) []string {
 				return []string{
@@ -339,8 +365,47 @@ func TestRunChanges(t *testing.T) {
 					"amd64=" + f.carrier("librespeed", "amd64", nil), "arm64=" + f.carrier("librespeed", "arm64", nil),
 				}
 			},
+			wantCode: 0,
+			wantStdout: "amd64: published manifest unreadable (schema 1)\n" +
+				"arm64: published manifest unreadable (schema 1)\n",
+		},
+		{
+			name: "published-records-garbled",
+			args: func(f fixture) []string {
+				return []string{
+					"-changes", "-app", "librespeed", "-published", f.published("librespeed", garbled, "amd64", "arm64"),
+					"amd64=" + f.carrier("librespeed", "amd64", nil), "arm64=" + f.carrier("librespeed", "arm64", nil),
+				}
+			},
+			wantCode: 0,
+			wantStdout: "amd64: published manifest unreadable (schema 3)\n" +
+				"arm64: published manifest unreadable (schema 3)\n",
+		},
+		{
+			// A candidate is never let off: a build whose own records
+			// cannot be read fails, schema 2 or not
+			name: "candidate-schema-2",
+			args: func(f fixture) []string {
+				return []string{
+					"-changes", "-app", "librespeed", "-published", f.published("librespeed", nil, "amd64", "arm64"),
+					"amd64=" + f.carrier("librespeed", "amd64", schema2), "arm64=" + f.carrier("librespeed", "arm64", nil),
+				}
+			},
 			wantCode:   1,
-			wantStderr: "xcaddy.txt",
+			wantStderr: "spc.txt",
+		},
+		{
+			// What is published is read before it is let off as
+			// unreadable, so a binary with a file capability still fails
+			name: "published-capability",
+			args: func(f fixture) []string {
+				return []string{
+					"-changes", "-app", "librespeed", "-published", f.published("librespeed", capability, "amd64", "arm64"),
+					"amd64=" + f.carrier("librespeed", "amd64", nil), "arm64=" + f.carrier("librespeed", "arm64", nil),
+				}
+			},
+			wantCode:   1,
+			wantStderr: "file capability",
 		},
 		{
 			name: "amd64-unpublished",

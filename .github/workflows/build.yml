@@ -122,9 +122,13 @@ jobs:
           # Refuses an apps/<app>.env that sets anything but the four
           # inputs, and the substitution fails the step when it does.
           out=$(go run ./cmd/frankenphp-buildargs "${APP}")
+          # The recipe the records stage writes down, so that an edit to
+          # either file moves the carrier's manifest.
+          recipe=$(cat Containerfile "apps/${APP}.env" | sha256sum)
           mkdir -p /tmp/carrier
           args=(
             --target carrier --build-arg "APP=${APP}"
+            --build-arg "RECIPE_SHA256=${recipe%% *}"
             --secret 'id=github_token,env=GITHUB_TOKEN'
             --attest 'type=provenance,mode=max'
             --output 'type=oci,dest=/tmp/carrier/carrier.tar,rewrite-timestamp=true'

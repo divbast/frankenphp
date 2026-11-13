@@ -1,0 +1,39 @@
+# FrankenPHP static build definition, consumed by static-php-cli v3 (`spc craft`).
+# Reference: https://static-php.dev/en/develop/craft-yml
+
+php-version: "8.5.12"
+
+# Statically linked PHP extensions.
+extensions: "dom,pdo,pdo_sqlite,sqlite3,zlib,mbstring,mbregex,iconv,session,xml,xmlreader,xmlwriter,simplexml,filter,tokenizer,ctype,pcntl,posix,opcache,openssl"
+
+# Extra libraries that are not pulled in by an extension.
+# brotli is required by github.com/dunglas/caddy-cbrotli, watcher by the file watcher.
+packages: "watcher,brotli"
+sapi: "frankenphp"
+
+clean-build: false
+
+build-options:
+  enable-zts: true
+  with-config-file-path: "/etc/frankenphp"
+  with-config-file-scan-dir: "/etc/frankenphp/php.d"
+  no-strip: false
+  with-upx-pack: false
+  with-frankenphp-app: ""
+  with-suggests: true
+
+download-options:
+  custom-git: ["libaom:v3.15.3:https://aomedia.googlesource.com/aom"]
+  parallel: 10
+  retry: 5
+  # build-static.sh points this at the working tree it runs from
+  custom-local: ["frankenphp:/go/src/app"]
+
+extra-env:
+  SPC_CMD_VAR_FRANKENPHP_XCADDY_MODULES: "--with github.com/dunglas/caddy-cbrotli@v1.0.1 --with github.com/dunglas/mercure/caddy@v1.1.6 --with github.com/dunglas/vulcain/caddy@v1.4.6"
+  EXTENSION_DIR: "/usr/lib/frankenphp/modules"
+  OPENSSLDIR: "/etc/ssl"
+
+craft-options:
+  doctor: true
+  download: true

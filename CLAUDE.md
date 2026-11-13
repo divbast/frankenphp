@@ -116,6 +116,23 @@ this project's one record of LLM involvement.
   moving backwards within one commit. A push or a dispatch passes no
   content change at all. `cmd/frankenphp-manifest/workflow_test.go` fails if
   `build.yml` compares under any other condition
+- **The manifest holds how the binary was built, not only what it holds.**
+  `spc`, `builder`, `craft` and `recipe` (schema 3) catch what the binary
+  does not report: an spc bump, a builder bump with the same FrankenPHP,
+  and the flags in the rendered `dist/craft.yml`. `recipe` is the sha256
+  of the `Containerfile` then `apps/<app>.env`, which `build.yml` and
+  `just build-app` compute alike and pass as `RECIPE_SHA256`. Only the
+  records stage declares that ARG: an ARG puts its value in the cache key
+  of every step after it, so in the build stage any edit to either file,
+  a comment among them, would rebuild the binary. `build/containerfile_test.go`
+  holds it there
+- **A new schema publishes once.** Each schema adds records
+  (`schemaRecords` in `internal/manifest`), and a published carrier whose
+  records do not read as the current schema is a change, reported as
+  `published manifest unreadable (schema N)` with N the newest schema its
+  records complete, so the merge that bumps the schema publishes both
+  carriers. A candidate whose own records cannot be read fails the build.
+  A schema change must add a record, or N cannot tell the old from the new
 - **The manifest leaves out what varies between identical builds.** Two
   builds of the same inputs differ only in the `time` fields of
   `spc-cache.json`; carrier digests always differ. A field added to the

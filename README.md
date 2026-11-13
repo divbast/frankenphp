@@ -122,9 +122,13 @@ access to its data, first.
 `build/records.sh` writes into the carrier what the binary reports about
 itself, what Go reports about the xcaddy that built it and what spc
 recorded: `app.txt`, `version.txt`, `build-info.txt`, `xcaddy.txt`,
-`extensions.txt`, `spc-cache.json` and `build-manifest.json`.
-`cmd/frankenphp-manifest` reads them, from the carrier's layers, into a
-manifest:
+`extensions.txt`, `spc-cache.json` and `build-manifest.json`. Beside them
+it writes what built the binary without the binary saying so: `spc.txt`,
+the static-php-cli commit; `builder.txt`, the builder image by digest;
+`craft.yml`, the file `build-static.sh` rendered for spc, which holds the
+build's flags; and `recipe.txt`, the sha256 of the `Containerfile`
+followed by `apps/<app>.env`. `cmd/frankenphp-manifest` reads them, from
+the carrier's layers, into a manifest:
 
 ```sh
 frankenphp-manifest -oci carrier.tar -arch arm64 -app librespeed
@@ -132,7 +136,7 @@ frankenphp-manifest -oci carrier.tar -arch arm64 -app librespeed
 
 ```json
 {
-  "schema": 2,
+  "schema": 3,
   "app": "librespeed",
   "arch": "arm64",
   "frankenphp": "v1.13.5",
@@ -140,6 +144,10 @@ frankenphp-manifest -oci carrier.tar -arch arm64 -app librespeed
   "caddy": "v2.11.9",
   "go": "go1.27.4",
   "xcaddy": "v0.4.7",
+  "spc": "3ba9ffa0593b94202b48d6dde51e489191ecdbf1",
+  "builder": "sha256:4dcdd53971ba1f373c3eb90e393dd3944687938c5c03494ab684921594905fc7",
+  "craft": "4f6e7ebe03e0f498f5841813512d9fb01812d80fb0ee982839fc408cf09282a6",
+  "recipe": "06b287fccf41e26f35a16f2daef3663306b271f7768aacb52cf15840fc60530f",
   "extensions": ["Core", "PDO", "Phar", "…"],
   "libraries": {
     "libaom": "dev-v3.15.3+b141d9c@b141d9c45db236335351c8a4b2a14b3ade27c937",
@@ -153,6 +161,17 @@ frankenphp-manifest -oci carrier.tar -arch arm64 -app librespeed
 `xcaddy` is the version Go recorded for the xcaddy that built the binary,
 which `build/pinned-versions.sh` has already held to the Containerfile's
 `XCADDY_VERSION`.
+
+`spc`, `builder` and `craft` move with a change the binary does not
+report: a new static-php-cli commit can change how every library is
+patched and built, a new builder its compilers and headers, and the
+rendered `craft.yml` the flags spc builds with. `recipe` moves with any
+edit to the `Containerfile` or the app's file, a comment among them, so
+any change to the pins, the build or the app's inputs moves the manifest,
+while one to a check under `build/`, the workflows or the documentation
+does not.
+The build passes it as `RECIPE_SHA256`, which only the stage that writes
+the records declares, so a new recipe never rebuilds the binary.
 
 Each library is the version spc resolved, or the file it fetched when it
 names none, then the hash of that source: a SHA-1 for an archive, the
