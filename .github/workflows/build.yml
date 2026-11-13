@@ -35,6 +35,13 @@ on:
 
 permissions: {}
 
+# The mise every jdx/mise-action step below installs, which would otherwise
+# be the newest release at least a day old when the step runs. Renovate
+# moves it.
+env:
+  # renovate: datasource=github-releases depName=jdx/mise
+  MISE_VERSION: 2026.11.7
+
 # GitHub keeps one pending run per group, and a newer one replaces it. The
 # event in the group stops a push run replacing a pending daily or button
 # run.
@@ -75,14 +82,20 @@ jobs:
         with:
           persist-credentials: false
       - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        with:
+          version: ${{ env.MISE_VERSION }}
 
       # divbast/ci at the commit the workflows pin, and its tools in .ci/bin
       - run: just setup
       - run: just ci-tools
 
       # The default docker driver cannot export an OCI archive with its
-      # provenance
+      # provenance. The BuildKit daemon that builds the carrier is pinned
+      # by digest, where the action would take buildx-stable-1 as it
+      # stands that day; Renovate moves it.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
       - name: Pin the build clock to the commit
         run: echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "${GITHUB_ENV}"
       # Only for a pull request, whose build never publishes.
@@ -233,12 +246,16 @@ jobs:
       # cmd/frankenphp-manifest/workflow_test.go holds the job to this.
       - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
         with:
+          version: ${{ env.MISE_VERSION }}
           install_args: core:go aqua:casey/just
       # divbast/ci at the commit the workflows pin, and its tools in .ci/bin
       - run: just ci-checkout
       - run: just ci-tools
-      # For `imagetools create`
+      # For `imagetools create`, which needs no daemon, though the action
+      # starts one all the same: the same pinned BuildKit as the build's.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
 
       # Both, or the job fails here, before anything is pushed.
       - name: Fetch the amd64 carrier

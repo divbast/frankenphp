@@ -4,9 +4,11 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -155,6 +157,105 @@ func TestPublishJobInstallsOnlyWhatItRuns(t *testing.T) {
 
 // installs matches a command that installs every tool in mise.toml.
 var installs = regexp.MustCompile(`\bjust\s+setup\b|\bmise\s+install\b`)
+
+// The shared Renovate managers' patterns for the two build tools the
+// workflow pins (divbast/renovate-config's default.json, customManagers),
+// as Renovate reads them: a pin in any other shape is one Renovate never
+// moves.
+var (
+	buildkitPin = regexp.MustCompile(`image=(?<depName>moby/buildkit):(?<currentValue>v[0-9.]+)@(?<currentDigest>sha256:[a-f0-9]{64})`)
+	misePin     = regexp.MustCompile(`# renovate: datasource=(?<datasource>github-releases) depName=(?<depName>jdx/mise)\n\s*MISE_VERSION: ["']?(?<currentValue>[0-9.]+)["']?`)
+)
+
+// TestBuildToolsPinned checks that the BuildKit daemon and mise, which
+// the actions would otherwise take at whatever release is newest, are
+// pinned where Renovate's shared managers read them:
+//
+//   - every docker/setup-buildx-action step sets driver-opts to one
+//     moby/buildkit version and digest, buildkitPin's shape, the same in
+//     every step;
+//   - the workflow's own env: holds MISE_VERSION under its renovate
+//     marker, misePin's shape, and every jdx/mise-action step passes it
+//     as its version.
+func TestBuildToolsPinned(t *testing.T) {
+	t.Parallel()
+	workflow := readLines(t, ".github", "workflows", "build.yml")
+
+	var buildx, mise, pins []string
+	for i, line := range workflow {
+		trimmedLine := strings.TrimSpace(line)
+		switch {
+		case strings.Contains(trimmedLine, "uses: docker/setup-buildx-action@"):
+			buildx = append(buildx, fmt.Sprintf("build.yml:%d", i+1))
+			opts, ok := stepWith(workflow, i, "driver-opts")
+			m := buildkitPin.FindStringSubmatch(opts)
+			if !ok || m == nil || opts != m[0] {
+				t.Errorf("build.yml:%d: setup-buildx-action's driver-opts is %q, not image=moby/buildkit:v<version>@sha256:<digest>", i+1, opts)
+				continue
+			}
+			pins = append(pins, opts)
+		case strings.Contains(trimmedLine, "uses: jdx/mise-action@"):
+			mise = append(mise, fmt.Sprintf("build.yml:%d", i+1))
+			if version, ok := stepWith(workflow, i, "version"); !ok || version != "${{ env.MISE_VERSION }}" {
+				t.Errorf("build.yml:%d: mise-action's version is %q, not ${{ env.MISE_VERSION }}", i+1, version)
+			}
+		}
+	}
+	if len(buildx) == 0 || len(mise) == 0 {
+		t.Fatalf("build.yml runs setup-buildx-action at %q and mise-action at %q; with none of either, this checks nothing of it", buildx, mise)
+	}
+	if distinct := slices.Compact(slices.Sorted(slices.Values(pins))); len(distinct) > 1 {
+		t.Errorf("build.yml pins BuildKit %d ways: %q", len(distinct), distinct)
+	}
+
+	env := strings.Join(topLevel(workflow, "env"), "\n")
+	if m := misePin.FindStringSubmatch(env); m == nil {
+		t.Errorf("build.yml's own env: holds no MISE_VERSION under %q: %q", "# renovate: datasource=github-releases depName=jdx/mise", env)
+	}
+}
+
+// stepWith returns the value of key in the with: of the step whose uses:
+// is workflow[at], trimmed, and whether the step sets it there.
+func stepWith(workflow []string, at int, key string) (string, bool) {
+	keys := indent(workflow[at])
+	if strings.HasPrefix(strings.TrimSpace(workflow[at]), "- ") {
+		keys += 2
+	}
+	in := false
+	for _, line := range workflow[at+1:] {
+		trimmedLine := strings.TrimSpace(line)
+		switch {
+		case trimmedLine == "" || strings.HasPrefix(trimmedLine, "#"):
+		case indent(line) < keys:
+			return "", false
+		case indent(line) == keys:
+			in = trimmedLine == "with:"
+		case in && indent(line) == keys+2:
+			if value, ok := strings.CutPrefix(trimmedLine, key+":"); ok {
+				return strings.TrimSpace(value), true
+			}
+		}
+	}
+	return "", false
+}
+
+// topLevel returns the lines of the workflow's top-level key called name,
+// below its name up to the next line that is not indented.
+func topLevel(workflow []string, name string) []string {
+	for i, line := range workflow {
+		if line != name+":" {
+			continue
+		}
+		end := i + 1
+		for ; end < len(workflow); end++ {
+			if next := workflow[end]; next != "" && indent(next) == 0 {
+				break
+			}
+		}
+		return workflow[i+1 : end]
+	}
+	return nil
+}
 
 // jobEnv returns which lines of job, as jobLines returns it, are in the
 // job's own env: block, the one beside its steps: and before it.

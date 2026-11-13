@@ -127,6 +127,13 @@ this project's one record of LLM involvement.
 - **Both architectures publish together or not at all.** The index is made
   from the two images the publish job pushed, by digest, and a tag never
   moves to an older commit than the one it holds
+- **BuildKit and mise are pinned in `build.yml`**, BuildKit by digest in
+  each `docker/setup-buildx-action`'s `driver-opts`, mise as the
+  workflow's `MISE_VERSION`, which every `jdx/mise-action` step passes as
+  `version`. Left unset, the actions take `buildx-stable-1` and the newest
+  mise release at least a day old. divbast/renovate-config's shared
+  managers move them, and read them only in exactly these shapes, which
+  `cmd/frankenphp-manifest/workflow_test.go` holds
 
 ## Key commands
 
