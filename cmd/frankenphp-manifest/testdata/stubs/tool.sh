@@ -4,9 +4,10 @@
 
 # Stands in, in publish_test.go, for the decide step's other commands, by
 # the name it runs as: git, go, mise, and divbast/ci's
-# divbast-published-revision and divbast-publish-decision. It records each call in STUB_LOG. Then
-# divbast-published-revision prints STUB_PUBLISHED, as the commit the
-# published image was built from, empty when nothing is; go prints
+# divbast-published-revision and divbast-publish-decision. It records
+# each call in STUB_LOG. Then divbast-published-revision prints
+# STUB_PUBLISHED, as the commit the published image was built from, empty
+# when nothing is; go prints
 # STUB_CHANGE, as frankenphp-manifest -changes prints what moved; and
 # divbast-publish-decision writes its arguments to STUB_DECISION_ARGS, each
 # ended by a NUL, since one may hold newlines or nothing at all.

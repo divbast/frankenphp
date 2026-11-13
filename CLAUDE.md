@@ -212,16 +212,18 @@ this project's one record of LLM involvement.
   mise release at least a day old. divbast/renovate-config's shared
   managers move them, and read them only in exactly these shapes, which
   `cmd/frankenphp-manifest/workflow_test.go` holds
-- **The publish job takes nothing from `mise.toml` but its tools.** Its
-  `jdx/mise-action` step sets `env`, `export_path` and `add_shims_to_path`
-  to `"false"`, since each defaults to true and would write `mise.toml`'s
-  `[env]`, its PATH entries and its shims into every later step, where a
-  `BASH_ENV` or a `PATH` would change what the pinned scripts run. `go` and
-  `just` run as `mise exec -- go` and `mise exec -- just`, which gives that
-  one command the toolchain and the `[env]`. The job's `uses:` steps are
-  exactly the actions the test lists, in order, each pinned to a full SHA
-  with its version as a comment: an action it gains is a change to review
-  in that test. This is divbast/ci's rule for its own publish job
+- **The publish job's steps get none of `mise.toml`'s `[env]`, PATH or
+  shims.** Its `jdx/mise-action` step sets `env`, `export_path` and
+  `add_shims_to_path` to `"false"`, since each defaults to true and would
+  write them into every later step's shell, where a `BASH_ENV` or a `PATH`
+  would change what the pinned scripts run. `go` and `just` run as
+  `mise exec -- go` and `mise exec -- just`, and only a command run that
+  way gets the toolchain and the `[env]`: the bash `just` starts reads a
+  `BASH_ENV` set there, so `mise.toml`'s `[env]` stays free of one. The job's
+  `uses:` steps are exactly the actions the test lists, in order, each
+  pinned to a full SHA with its version as a comment: an action it gains
+  is a change to review in that test. This is divbast/ci's rule for its own
+  publish job
 
 ## Key commands
 

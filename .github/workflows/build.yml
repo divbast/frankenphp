@@ -257,10 +257,12 @@ jobs:
         with:
           version: ${{ env.MISE_VERSION }}
           install_args: core:go aqua:casey/just
-          # Nothing of mise.toml's [env] or PATH reaches a step: go and just
-          # run through `mise exec --`, which gives that one command the
-          # toolchain and the [env], and no step sees a BASH_ENV or a PATH
-          # written there. The default of each input is true.
+          # The steps' own shells get none of mise.toml's [env], PATH or
+          # shims, so a BASH_ENV or a PATH written there reaches none of
+          # them. go and just run through `mise exec --`, which gives that
+          # one command the toolchain and the [env]: the bash that just
+          # starts reads a BASH_ENV set there. The default of each input is
+          # true.
           env: "false"
           export_path: "false"
           add_shims_to_path: "false"
