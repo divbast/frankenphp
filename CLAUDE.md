@@ -218,8 +218,12 @@ this project's one record of LLM involvement.
   `[env]`, its PATH entries and its shims into every later step, where a
   `BASH_ENV` or a `PATH` would change what the pinned scripts run. `go` and
   `just` run as `mise exec -- go` and `mise exec -- just`, which gives that
-  one command the toolchain and the `[env]`. This is divbast/ci's rule for
-  its own publish job, held here by `TestPublishMiseIsolated`
+  one command the toolchain and the `[env]`. The job's `uses:` steps are
+  exactly the actions `TestPublishUsesOnlyItsActions` lists, in order, each
+  pinned to a full SHA with its version as a comment, though not to a
+  particular SHA, so Renovate's bumps pass: an action the job gains is a
+  change to review there. Both are divbast/ci's rules for its own publish
+  job, held here by `TestPublishMiseIsolated` and that test
 
 ## Key commands
 

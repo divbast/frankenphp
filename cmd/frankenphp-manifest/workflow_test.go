@@ -1054,3 +1054,115 @@ func TestPublishMiseIsolated(t *testing.T) {
 		})
 	}
 }
+
+// publishActions is every action the publish job uses, in the order its
+// steps use them. The job holds packages: write, id-token: write and
+// attestations: write, so an action it gains is a change to review here,
+// not one that arrives with a line no golden pins (FP-5, backlog; the rule
+// is divbast/ci's CI-11).
+var publishActions = []string{
+	"actions/checkout",
+	"jdx/mise-action",
+	"docker/setup-buildx-action",
+	"actions/download-artifact",
+	"actions/download-artifact",
+	"docker/login-action",
+	"actions/attest",
+}
+
+// actionPin is a uses: value as the workflows pin an action: owner/repo at
+// a full commit SHA, with the version as a comment. Renovate and pinact
+// move the commit and the version, so this fixes neither.
+var actionPin = regexp.MustCompile(`^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)@[0-9a-f]{40} # v[0-9][0-9A-Za-z.+-]*$`)
+
+// usesProblems reports every way the job's uses: steps differ from
+// publishActions: another action, one missing, another order, or one not
+// pinned as actionPin reads it.
+func usesProblems(job []string) []string {
+	var problems []string
+	var used []string
+	for _, step := range stepLines(job) {
+		value, ok := stepKey(step, "uses")
+		if !ok {
+			continue
+		}
+		if q := value[:min(1, len(value))]; q == `"` || q == `'` {
+			quoted, comment, _ := strings.Cut(value[1:], q)
+			value = quoted + comment
+		}
+		m := actionPin.FindStringSubmatch(value)
+		if m == nil {
+			problems = append(problems, fmt.Sprintf("the publish job uses %q, not an action pinned to a full commit SHA with its version as a comment", value))
+			continue
+		}
+		used = append(used, m[1])
+	}
+	if !slices.Equal(used, publishActions) {
+		problems = append(problems, fmt.Sprintf("the publish job uses %q, want exactly %q, in that order", used, publishActions))
+	}
+	return problems
+}
+
+// TestPublishUsesOnlyItsActions checks usesProblems against the publish
+// job as it is, then with each change below, which it must refuse, and
+// with a pin moved as Renovate moves one, which it must accept (FP-5).
+func TestPublishUsesOnlyItsActions(t *testing.T) {
+	t.Parallel()
+	job := jobLines(readLines(t, ".github", "workflows", "build.yml"), "publish")
+	if job == nil {
+		t.Fatal("build.yml has no publish job")
+	}
+	if got := usesProblems(job); len(got) != 0 {
+		t.Errorf("the publish job: %q", got)
+	}
+	text := strings.Join(job, "\n")
+	const (
+		attest = "      - uses: actions/attest@"
+		cache  = "      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0\n        with:\n          path: /tmp/x\n          key: x\n"
+	)
+	for name, mutant := range map[string]string{
+		"one more action":          strings.Replace(text, attest, cache+attest, 1),
+		"an action renamed":        strings.Replace(text, "uses: docker/login-action@", "uses: docker/login-actions@", 1),
+		"an action by tag":         regexp.MustCompile(`actions/attest@[0-9a-f]{40} # (v[0-9.]+)`).ReplaceAllString(text, "actions/attest@$1"),
+		"an action by a short SHA": regexp.MustCompile(`(actions/attest@[0-9a-f]{12})[0-9a-f]{28}`).ReplaceAllString(text, "$1"),
+		"a pin with no version":    regexp.MustCompile(`(actions/attest@[0-9a-f]{40}) # v[0-9.]+`).ReplaceAllString(text, "$1"),
+		"a local action":           strings.Replace(text, attest, "      - uses: ./.ci/.github/actions/sign\n"+attest, 1),
+		"a container action":       strings.Replace(text, attest, "      - uses: docker://alpine:3\n"+attest, 1),
+		"an action left out":       regexp.MustCompile(`(?m)^ {6}- uses: docker/login-action@.*\n(?: {8}.*\n)*`).ReplaceAllString(text, ""),
+		"an action, mixed case":    strings.Replace(text, "uses: actions/download-artifact@", "uses: Actions/Download-Artifact@", 1),
+		"two actions swapped":      swapLines(text, "      - uses: docker/setup-buildx-action@", "      - uses: jdx/mise-action@"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if mutant == text {
+				t.Fatal("the change changed nothing")
+			}
+			if len(usesProblems(strings.Split(mutant, "\n"))) == 0 {
+				t.Error("passes the publish job with " + name)
+			}
+		})
+	}
+	t.Run("a pin Renovate moves", func(t *testing.T) {
+		t.Parallel()
+		bumped := regexp.MustCompile(`actions/attest@[0-9a-f]{40} # v[0-9.]+`).ReplaceAllString(text, "actions/attest@"+strings.Repeat("a", 40)+" # v9.0.0")
+		if bumped == text {
+			t.Fatal("the change changed nothing")
+		}
+		if got := usesProblems(strings.Split(bumped, "\n")); len(got) != 0 {
+			t.Errorf("refuses the publish job with actions/attest moved: %q", got)
+		}
+	})
+}
+
+// swapLines returns text with the first line that starts with a swapped
+// with the first line that starts with b.
+func swapLines(text, a, b string) string {
+	lines := strings.Split(text, "\n")
+	i := slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, a) })
+	j := slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, b) })
+	if i < 0 || j < 0 {
+		return text
+	}
+	lines[i], lines[j] = lines[j], lines[i]
+	return strings.Join(lines, "\n")
+}
