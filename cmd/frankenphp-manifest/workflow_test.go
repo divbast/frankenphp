@@ -184,16 +184,14 @@ func TestRecipeHashCoversBothFiles(t *testing.T) {
 	}
 }
 
-// TestStallSlotsContentGated checks that every job of the stall workflow
-// that runs its slots check passes content-gated: true. The publish job
-// gates each publish on its content, so a daily slot can succeed and leave
-// an older commit published; without the input, stall counts each such
-// slot as lost and fails two days after any merge that left the binary as
-// it was.
-func TestStallSlotsContentGated(t *testing.T) {
-	t.Parallel()
-	workflow := readLines(t, ".github", "workflows", "stall.yml")
-	var slots []string
+// slotsProblems reports every way a job of the stall workflow that runs
+// its slots check fails to pass content-gated: true and slot-job, the
+// publish job's name in that app's slot run, "publish (<tag>)" for the
+// image published as frankenphp:<tag> (FP-3, backlog). Without slot-job,
+// stall reads the whole run's conclusion, and a leg that failed for
+// another app fails this app's slot. It returns the number of slots jobs
+// it found, to be told from none.
+func slotsProblems(workflow []string) (problems []string, slots int) {
 	for _, name := range mappingKeys(topLevel(workflow, "jobs"), 2) {
 		job := jobLines(workflow, name)
 		at := slices.IndexFunc(job, func(line string) bool { return strings.HasPrefix(strings.TrimSpace(line), "uses: ") })
@@ -204,13 +202,58 @@ func TestStallSlotsContentGated(t *testing.T) {
 		if !strings.Contains(checks, `"slots"`) {
 			continue
 		}
-		slots = append(slots, name)
+		slots++
 		if gated, ok := stepWith(job, at, "content-gated"); !ok || gated != "true" {
-			t.Errorf("stall.yml's %s job runs the slots check with content-gated: %q, not true", name, gated)
+			problems = append(problems, fmt.Sprintf("stall.yml's %s job runs the slots check with content-gated: %q, not true", name, gated))
+		}
+		published, _ := stepWith(job, at, "published")
+		_, tag, _ := strings.Cut(published, "ghcr.io/divbast/frankenphp:")
+		want := "publish (" + tag + ")"
+		if tag == "" {
+			problems = append(problems, fmt.Sprintf("stall.yml's %s job publishes %q, not ghcr.io/divbast/frankenphp:<tag>", name, published))
+		}
+		if got, _ := stepWith(job, at, "slot-job"); strings.Trim(got, `"'`) != want {
+			problems = append(problems, fmt.Sprintf("stall.yml's %s job runs the slots check with slot-job: %q, not %q", name, got, want))
 		}
 	}
-	if len(slots) == 0 {
-		t.Fatal("stall.yml has no job that runs the slots check")
+	return problems, slots
+}
+
+// TestStallSlotsContentGated checks that every job of the stall workflow
+// that runs its slots check passes content-gated: true and its own
+// publish job as slot-job, as slotsProblems reads them. The publish job
+// gates each publish on its content, so a daily slot can succeed and leave
+// an older commit published; without content-gated, stall counts each such
+// slot as lost and fails two days after any merge that left the binary as
+// it was. Against stall.yml as it is, then with each change below, which
+// the check must refuse.
+func TestStallSlotsContentGated(t *testing.T) {
+	t.Parallel()
+	text := strings.Join(readLines(t, ".github", "workflows", "stall.yml"), "\n")
+	problems, slots := slotsProblems(strings.Split(text, "\n"))
+	if slots != 2 {
+		t.Fatalf("stall.yml has %d jobs that run the slots check, not 2", slots)
+	}
+	for _, problem := range problems {
+		t.Error(problem)
+	}
+	for name, mutant := range map[string]string{
+		"no slot-job for baikal":       strings.Replace(text, "      slot-job: publish (baikal)\n", "", 1),
+		"no slot-job for librespeed":   strings.Replace(text, "      slot-job: publish (librespeed)\n", "", 1),
+		"another app's slot-job":       strings.Replace(text, "slot-job: publish (baikal)", "slot-job: publish (librespeed)", 1),
+		"the matrix job's raw name":    strings.Replace(text, "slot-job: publish (baikal)", "slot-job: publish (${{ matrix.app }})", 1),
+		"content-gated off, baikal":    strings.Replace(text, "      content-gated: true\n", "", 1),
+		"content-gated false, a slots": strings.Replace(text, "content-gated: true", "content-gated: false", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if mutant == text {
+				t.Fatal("the change changed nothing")
+			}
+			if got, _ := slotsProblems(strings.Split(mutant, "\n")); len(got) == 0 {
+				t.Error("passes stall.yml with " + name)
+			}
+		})
 	}
 }
 
@@ -623,6 +666,10 @@ func TestPublishPermissionsUnchanged(t *testing.T) {
 // workflow pins (divbast/renovate-config's default.json, customManagers),
 // as Renovate reads them: a pin in any other shape is one Renovate never
 // moves.
+//
+// These are copies. The preset's default.json is the source, and
+// renovate-config's CLAUDE.md lists every copy: a change to a pattern
+// there is a change to buildkitPin and misePin here (FP-4, backlog).
 var (
 	buildkitPin = regexp.MustCompile(`image=(?<depName>moby/buildkit):(?<currentValue>v[0-9.]+)@(?<currentDigest>sha256:[a-f0-9]{64})`)
 	misePin     = regexp.MustCompile(`# renovate: datasource=(?<datasource>github-releases) depName=(?<depName>jdx/mise)\n\s*MISE_VERSION: ["']?(?<currentValue>[0-9.]+)["']?`)
@@ -929,4 +976,197 @@ func miseTools(t *testing.T) map[string]bool {
 		t.Fatal("mise.toml names no tools")
 	}
 	return tools
+}
+
+// miseIsolationProblems reports every way the job lets what mise makes of
+// the repository's mise.toml reach its steps (FP-1, backlog; the rule is
+// divbast/ci's CI-12, so it holds the same in both repositories):
+//
+//   - each jdx/mise-action step sets env, export_path and add_shims_to_path
+//     to "false". All three default to true, under which the action writes
+//     mise.toml's [env], the PATH entries mise makes and its shims'
+//     directory into every later step, where a BASH_ENV or a PATH would
+//     change what the pinned scripts run without a line of them changing;
+//   - go and just run only through `mise exec --`, which gives that one
+//     command the toolchain and the [env] of mise.toml, and nothing else.
+func miseIsolationProblems(job []string) []string {
+	var problems []string
+	for i, line := range job {
+		trimmedLine := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmedLine, "#"):
+		case strings.Contains(trimmedLine, "uses: jdx/mise-action@"):
+			for _, input := range []string{"env", "export_path", "add_shims_to_path"} {
+				got, _ := stepWith(job, i, input)
+				if strings.Trim(got, `"'`) != "false" {
+					problems = append(problems, fmt.Sprintf("the publish job's jdx/mise-action sets %s: %q, not \"false\", so what mise makes of mise.toml reaches every later step", input, got))
+				}
+			}
+		case !allThroughMise(trimmedLine):
+			problems = append(problems, fmt.Sprintf("the publish job runs %q, not through mise exec --, so it needs mise's PATH", trimmedLine))
+		}
+	}
+	return problems
+}
+
+// bareTool matches go or just as a command word: after the start of a line
+// or a step's run:, a space, an opening parenthesis, a pipe or a semicolon.
+var bareTool = regexp.MustCompile(`(?:^|[\s(|;&])(?:go|just)\s+[a-z./-]`)
+
+// allThroughMise returns whether every go or just command on the line is
+// preceded by mise exec --.
+func allThroughMise(line string) bool {
+	for _, at := range bareTool.FindAllStringIndex(line, -1) {
+		if !strings.HasSuffix(strings.TrimRight(line[:at[0]], " "), "mise exec --") {
+			return false
+		}
+	}
+	return true
+}
+
+// TestPublishMiseIsolated checks miseIsolationProblems against the publish
+// job as it is, then with each way of leaking mise.toml's [env] or PATH into
+// the job, which it must refuse (FP-1).
+func TestPublishMiseIsolated(t *testing.T) {
+	t.Parallel()
+	job := jobLines(readLines(t, ".github", "workflows", "build.yml"), "publish")
+	if job == nil {
+		t.Fatal("build.yml has no publish job")
+	}
+	if got := miseIsolationProblems(job); len(got) != 0 {
+		t.Errorf("the publish job: %q", got)
+	}
+	text := strings.Join(job, "\n")
+	for name, mutant := range map[string]string{
+		"env left at its default":         strings.Replace(text, "          env: \"false\"\n", "", 1),
+		"env on":                          strings.Replace(text, "          env: \"false\"\n", "          env: \"true\"\n", 1),
+		"export_path left at its default": strings.Replace(text, "          export_path: \"false\"\n", "", 1),
+		"export_path on":                  strings.Replace(text, "          export_path: \"false\"\n", "          export_path: true\n", 1),
+		"shims left on PATH":              strings.Replace(text, "          add_shims_to_path: \"false\"\n", "", 1),
+		"shims on":                        strings.Replace(text, "          add_shims_to_path: \"false\"\n", "          add_shims_to_path: true\n", 1),
+		"just off mise's PATH":            strings.Replace(text, "mise exec -- just ci-checkout", "just ci-checkout", 1),
+		"go off mise's PATH":              strings.Replace(text, "mise exec -- go run", "go run", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if mutant == text {
+				t.Fatal("the change changed nothing")
+			}
+			if len(miseIsolationProblems(strings.Split(mutant, "\n"))) == 0 {
+				t.Error("passes the publish job with " + name)
+			}
+		})
+	}
+}
+
+// publishActions is every action the publish job uses, in the order its
+// steps use them. The job holds packages: write, id-token: write and
+// attestations: write, so an action it gains is a change to review here,
+// not one that arrives with a line no golden pins (FP-5, backlog; the rule
+// is divbast/ci's CI-11).
+var publishActions = []string{
+	"actions/checkout",
+	"jdx/mise-action",
+	"docker/setup-buildx-action",
+	"actions/download-artifact",
+	"actions/download-artifact",
+	"docker/login-action",
+	"actions/attest",
+}
+
+// actionPin is a uses: value as the workflows pin an action: owner/repo at
+// a full commit SHA, with the version as a comment. Renovate and pinact
+// move the commit and the version, so this fixes neither.
+var actionPin = regexp.MustCompile(`^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)@[0-9a-f]{40} # v[0-9][0-9A-Za-z.+-]*$`)
+
+// usesProblems reports every way the job's uses: steps differ from
+// publishActions: another action, one missing, another order, or one not
+// pinned as actionPin reads it.
+func usesProblems(job []string) []string {
+	var problems []string
+	var used []string
+	for _, step := range stepLines(job) {
+		value, ok := stepKey(step, "uses")
+		if !ok {
+			continue
+		}
+		if q := value[:min(1, len(value))]; q == `"` || q == `'` {
+			quoted, comment, _ := strings.Cut(value[1:], q)
+			value = quoted + comment
+		}
+		m := actionPin.FindStringSubmatch(value)
+		if m == nil {
+			problems = append(problems, fmt.Sprintf("the publish job uses %q, not an action pinned to a full commit SHA with its version as a comment", value))
+			continue
+		}
+		used = append(used, m[1])
+	}
+	if !slices.Equal(used, publishActions) {
+		problems = append(problems, fmt.Sprintf("the publish job uses %q, want exactly %q, in that order", used, publishActions))
+	}
+	return problems
+}
+
+// TestPublishUsesOnlyItsActions checks usesProblems against the publish
+// job as it is, then with each change below, which it must refuse, and
+// with a pin moved as Renovate moves one, which it must accept (FP-5).
+func TestPublishUsesOnlyItsActions(t *testing.T) {
+	t.Parallel()
+	job := jobLines(readLines(t, ".github", "workflows", "build.yml"), "publish")
+	if job == nil {
+		t.Fatal("build.yml has no publish job")
+	}
+	if got := usesProblems(job); len(got) != 0 {
+		t.Errorf("the publish job: %q", got)
+	}
+	text := strings.Join(job, "\n")
+	const (
+		attest = "      - uses: actions/attest@"
+		cache  = "      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0\n        with:\n          path: /tmp/x\n          key: x\n"
+	)
+	for name, mutant := range map[string]string{
+		"one more action":          strings.Replace(text, attest, cache+attest, 1),
+		"an action renamed":        strings.Replace(text, "uses: docker/login-action@", "uses: docker/login-actions@", 1),
+		"an action by tag":         regexp.MustCompile(`actions/attest@[0-9a-f]{40} # (v[0-9.]+)`).ReplaceAllString(text, "actions/attest@$1"),
+		"an action by a short SHA": regexp.MustCompile(`(actions/attest@[0-9a-f]{12})[0-9a-f]{28}`).ReplaceAllString(text, "$1"),
+		"a pin with no version":    regexp.MustCompile(`(actions/attest@[0-9a-f]{40}) # v[0-9.]+`).ReplaceAllString(text, "$1"),
+		"a local action":           strings.Replace(text, attest, "      - uses: ./.ci/.github/actions/sign\n"+attest, 1),
+		"a container action":       strings.Replace(text, attest, "      - uses: docker://alpine:3\n"+attest, 1),
+		"an action left out":       regexp.MustCompile(`(?m)^ {6}- uses: docker/login-action@.*\n(?: {8}.*\n)*`).ReplaceAllString(text, ""),
+		"an action, mixed case":    strings.Replace(text, "uses: actions/download-artifact@", "uses: Actions/Download-Artifact@", 1),
+		"two actions swapped":      swapLines(text, "      - uses: docker/setup-buildx-action@", "      - uses: jdx/mise-action@"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if mutant == text {
+				t.Fatal("the change changed nothing")
+			}
+			if len(usesProblems(strings.Split(mutant, "\n"))) == 0 {
+				t.Error("passes the publish job with " + name)
+			}
+		})
+	}
+	t.Run("a pin Renovate moves", func(t *testing.T) {
+		t.Parallel()
+		bumped := regexp.MustCompile(`actions/attest@[0-9a-f]{40} # v[0-9.]+`).ReplaceAllString(text, "actions/attest@"+strings.Repeat("a", 40)+" # v9.0.0")
+		if bumped == text {
+			t.Fatal("the change changed nothing")
+		}
+		if got := usesProblems(strings.Split(bumped, "\n")); len(got) != 0 {
+			t.Errorf("refuses the publish job with actions/attest moved: %q", got)
+		}
+	})
+}
+
+// swapLines returns text with the first line that starts with a swapped
+// with the first line that starts with b.
+func swapLines(text, a, b string) string {
+	lines := strings.Split(text, "\n")
+	i := slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, a) })
+	j := slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, b) })
+	if i < 0 || j < 0 {
+		return text
+	}
+	lines[i], lines[j] = lines[j], lines[i]
+	return strings.Join(lines, "\n")
 }

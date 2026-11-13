@@ -36,11 +36,11 @@ MISE_AUTO_INSTALL: "false"
 
 ## (no name)
 run:
-just ci-checkout
+mise exec -- just ci-checkout
 
 ## (no name)
 run:
-just ci-tools
+mise exec -- just ci-tools
 
 ## Decide whether to publish
 env: EVENT: ${{ github.event_name }}
@@ -60,7 +60,7 @@ args=(-event "${EVENT}" -built "${GITHUB_SHA}" -published "${published}")
 if [[ -n "${published}" && ( "${EVENT}" == schedule || ( "${EVENT}" == push && "${published}" != "${GITHUB_SHA}" ) ) ]]; then
   # Every architecture, as an anonymous client pulls them
   skopeo copy --all --quiet --src-no-creds "docker://${IMAGE}:${APP}" oci-archive:/tmp/published.tar
-  change=$(go run ./cmd/frankenphp-manifest -changes -app "${APP}" -published /tmp/published.tar \
+  change=$(mise exec -- go run ./cmd/frankenphp-manifest -changes -app "${APP}" -published /tmp/published.tar \
     amd64=/tmp/carriers/amd64/carrier.tar arm64=/tmp/carriers/arm64/carrier.tar)
   args+=(-content-change "${change}" -content-gated)
 fi

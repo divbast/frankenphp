@@ -126,7 +126,10 @@ this project's one record of LLM involvement.
   `cmd/frankenphp-manifest/workflow_test.go` pins the condition and runs
   the decide step for every event against stubs. `stall.yml`'s slots jobs
   pass `content-gated: true`, without which a successful slot that left an
-  older commit published counts as lost
+  older commit published counts as lost, and `slot-job: publish (<app>)`,
+  which reads that app's publish job in the slot run, not the whole run's
+  conclusion, so a leg that failed for the other app is not this app's
+  lost slot
 - **The manifest holds how the binary was built, not only what it holds.**
   `spc`, `builder`, `craft` and `recipe` (schema 3) catch what the binary
   does not report: an spc bump, a builder bump with the same FrankenPHP,
@@ -194,10 +197,10 @@ this project's one record of LLM involvement.
   every command. `TestPublishShellIsBashWithPipefail` holds the job's
   effective shell to `bash`, `--noprofile --norc -eo pipefail`, which the
   behaviour tests run the steps under; left unset, Actions runs
-  `bash -e` without pipefail. A step written in any YAML form but the plain one the extractor
-  reads, such as `run: |-`, a flow mapping or a `shell:` key, fails the
-  test rather than going unread. A change shows as a diff: read it, and
-  only if it is meant run
+  `bash -e` without pipefail. A step written in any YAML form but the
+  plain one the extractor reads, such as `run: |-`, a flow mapping or a
+  `shell:` key, fails the test rather than going unread. A change shows as
+  a diff: read it, and only if it is meant run
   `go test ./cmd/frankenphp-manifest/ -run '^TestPublishShellPinned$' -update`
   and commit the file with it. `publish_test.go` also runs the verify and
   dry-run steps' own scripts under bash against the stubs in
@@ -209,6 +212,18 @@ this project's one record of LLM involvement.
   mise release at least a day old. divbast/renovate-config's shared
   managers move them, and read them only in exactly these shapes, which
   `cmd/frankenphp-manifest/workflow_test.go` holds
+- **The publish job's steps get none of `mise.toml`'s `[env]`, PATH or
+  shims.** Its `jdx/mise-action` step sets `env`, `export_path` and
+  `add_shims_to_path` to `"false"`, since each defaults to true and would
+  write them into every later step's shell, where a `BASH_ENV` or a `PATH`
+  would change what the pinned scripts run. `go` and `just` run as
+  `mise exec -- go` and `mise exec -- just`, and only a command run that
+  way gets the toolchain and the `[env]`: the bash `just` starts reads a
+  `BASH_ENV` set there, so `mise.toml`'s `[env]` stays free of one. The job's
+  `uses:` steps are exactly the actions the test lists, in order, each
+  pinned to a full SHA with its version as a comment: an action it gains
+  is a change to review in that test. This is divbast/ci's rule for its own
+  publish job
 
 ## Key commands
 
