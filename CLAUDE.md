@@ -219,7 +219,9 @@ this project's one record of LLM involvement.
   would change what the pinned scripts run. `go` and `just` run as
   `mise exec -- go` and `mise exec -- just`, and only a command run that
   way gets the toolchain and the `[env]`: the bash `just` starts reads a
-  `BASH_ENV` set there, so `mise.toml`'s `[env]` stays free of one. The job's
+  `BASH_ENV` set there, so `mise.toml`'s `[env]` stays free of one, and
+  `TestMiseEnvHoldsNoBashStartupKey` fails on `BASH_ENV`, `ENV` or a
+  `BASH_FUNC_*` key in it. The job's
   `uses:` steps are exactly the actions the test lists, in order, each
   pinned to a full SHA with its version as a comment: an action it gains
   is a change to review in that test. This is divbast/ci's rule for its own
