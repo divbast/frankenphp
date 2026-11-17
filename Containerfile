@@ -22,7 +22,7 @@ ARG VULCAIN_VERSION=v1.4.6
 # unchecked nightly binary on every build. Its v3 branch has no tags, so
 # Renovate follows the branch head by commit. build/pinned-spc.sh checks it
 # ran.
-ARG SPC_COMMIT=b8de36cc8caddc4347e2689cb728d0c25a91f128
+ARG SPC_COMMIT=565e5eb33e2b8b13ea117c51efceaa59373e3dd2
 # xcaddy, which writes the binary's main module and runs its build. spc
 # would otherwise install it from its master branch on most builds, as the
 # build stage below says. build/pinned-versions.sh checks the xcaddy that
