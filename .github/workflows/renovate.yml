@@ -41,7 +41,7 @@ permissions: {}
 jobs:
   renovate:
     name: renovate
-    uses: divbast/ci/.github/workflows/renovate.yml@f23bf2ef7b8ffe566ef8b3a051f5407fd4067b51 # v3.19.0
+    uses: divbast/ci/.github/workflows/renovate.yml@9d5f86eb1d8e057221661adfbfe92bb8bc379ae5 # v4.0.0
     with:
       automerge: ${{ vars.FRANKENPHP_AUTOMERGE == 'enabled' }}
     # The App's key lives in this repository's `renovate` environment, and a
