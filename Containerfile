@@ -13,7 +13,7 @@ ARG BUILDER_IMAGE=dunglas/frankenphp:static-builder-gnu@sha256:b2cb432f43e15803b
 # binary agrees. Not every input is pinned: spc still chooses the Go
 # toolchain and most C libraries as it runs, and records.sh writes down
 # which.
-ARG PHP_VERSION=8.5.12
+ARG PHP_VERSION=8.6.0
 ARG CADDY_VERSION=v2.11.9
 ARG CBROTLI_VERSION=v1.0.1
 ARG MERCURE_VERSION=v1.1.6
