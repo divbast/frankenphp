@@ -6,7 +6,7 @@
 # app's; what differs per app comes from apps/<app>.env, passed as build
 # arguments with the app's name as APP.
 
-ARG BUILDER_IMAGE=dunglas/frankenphp:static-builder-gnu@sha256:4dcdd53971ba1f373c3eb90e393dd3944687938c5c03494ab684921594905fc7
+ARG BUILDER_IMAGE=dunglas/frankenphp:static-builder-gnu@sha256:b2cb432f43e15803b306de85554948bf354bfc18e692faa59650e114138cd8e5
 # The binary's own roots. Unset, build-static.sh takes the newest PHP 8.5 from
 # php.net and xcaddy the newest Caddy and plugins, so two builds of one commit
 # could ship a different PHP or Caddy. build/pinned-versions.sh checks the
