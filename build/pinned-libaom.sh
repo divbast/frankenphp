@@ -6,17 +6,18 @@
 # pins, the build stage's ARG, whenever the build has libaom at all.
 # SPC_CACHE names spc's download cache.
 #
-# libaom's own spc config clones its main branch's head. The Containerfile
-# adds a custom-git line to craft.yml that clones the tag instead, and spc
-# ignores such a line, without a word, when the name in it is not one it
-# downloads. Its cache records a git clone's version as
-# "dev-<ref>+<short commit>", so only a clone of the tag reads
-# "dev-${LIBAOM_TAG}+". An app without gd, such as Baikal, has no libaom,
-# and passes, unless the cache lists libavif or a source from aomedia's
-# repository without it, which fails: spc would have ignored the custom-git
-# line for a renamed package. It passes only on a cache the craft wrote: the Containerfile's
-# go-xcaddy step writes one first, holding go-xcaddy alone, and no libaom in
-# that proves nothing. Every craft fetches php-src; install-pkg never does.
+# libaom's own spc config clones its main branch's head.
+# build/libaom-craft.sh adds a libaom entry under custom-git in craft.yml
+# that clones the tag instead, and spc ignores such an entry, without a
+# word, when the name in it is not one it downloads. Its cache records a
+# git clone's version as "dev-<ref>+<short commit>", so only a clone of the
+# tag reads "dev-${LIBAOM_TAG}+". An app without gd, such as Baikal, has no
+# libaom, and passes, unless the cache lists libavif or a source from
+# aomedia's repository without it, which fails: spc would have ignored the
+# custom-git entry for a renamed package. It passes only on a cache the
+# craft wrote: the Containerfile's go-xcaddy step writes one first, holding
+# go-xcaddy alone, and no libaom in that proves nothing. Every craft fetches
+# php-src; install-pkg never does.
 set -euo pipefail
 
 CACHE="${SPC_CACHE:-dist/downloads/.cache.json}"
@@ -51,7 +52,7 @@ if ! grep -qxF libaom <<<"${names}"; then
 	# No libaom is a pass only for a build that has nothing to bring it in.
 	# libavif needs the codec, and aomedia's repository is where libaom comes
 	# from: either in the cache without a libaom entry means spc fetched the
-	# codec under another name, or the custom-git line missed, and the pin
+	# codec under another name, or the custom-git entry missed, and the pin
 	# proves nothing.
 	reason=""
 	if grep -qxF libavif <<<"${names}"; then
@@ -60,7 +61,7 @@ if ! grep -qxF libaom <<<"${names}"; then
 		reason="a source from aomedia.googlesource.com, where libaom comes from,"
 	fi
 	if [[ -n "${reason}" ]]; then
-		fail "${CACHE} lists ${reason} but has no libaom entry: spc renamed its libaom package, or fetched it another way, so it ignored the custom-git line and LIBAOM_TAG=${LIBAOM_TAG} pins nothing."
+		fail "${CACHE} lists ${reason} but has no libaom entry: spc renamed its libaom package, or fetched it another way, so it ignored the custom-git entry and LIBAOM_TAG=${LIBAOM_TAG} pins nothing."
 		exit 1
 	fi
 	echo "no libaom in this build, so LIBAOM_TAG=${LIBAOM_TAG} pins nothing here"
@@ -75,7 +76,7 @@ fi
 if [[ -z "${version}" ]]; then
 	fail "spc recorded no version for libaom's source in ${CACHE}."
 elif [[ "${version}" != "dev-${LIBAOM_TAG}+"* ]]; then
-	fail "spc fetched libaom ${version}, but LIBAOM_TAG pins ${LIBAOM_TAG}: spc ignored the custom-git line the Containerfile adds to craft.yml."
+	fail "spc fetched libaom ${version}, but LIBAOM_TAG pins ${LIBAOM_TAG}: spc ignored the custom-git entry build/libaom-craft.sh adds to craft.yml."
 fi
 
 if ((FAILED)); then

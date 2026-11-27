@@ -1,0 +1,33 @@
+# download-options as static-builder-gnu-1.14.0 ships them in
+# /go/src/app/craft.yml, between the keys around them; the rest trimmed.
+
+php-version: "8.6"
+
+build-options:
+  enable-zts: true
+  with-config-file-path: "/etc/frankenphp"
+  with-config-file-scan-dir: "/etc/frankenphp/php.d"
+  no-strip: false
+  with-upx-pack: false
+  with-frankenphp-app: ""
+  with-suggests: true
+
+download-options:
+  parallel: 10
+  retry: 5
+  # These extensions don't build with PHP 8.6 yet, use branches that fix them
+  custom-git:
+    - "ext-amqp:issue-php86a2:https://github.com/remicollet/php-amqp.git"
+    - "ext-apcu:master:https://github.com/krakjoe/apcu.git"
+    - "ext-igbinary:master:https://github.com/igbinary/igbinary.git"
+    - "ext-imagick:master:https://github.com/Imagick/imagick.git"
+    - "ext-lz4:fix/static-zts-tsrm-cache:https://github.com/dunglas/php-ext-lz4.git"
+    - "ext-memcached:master:https://github.com/php-memcached-dev/php-memcached.git"
+    - "ext-msgpack:master:https://github.com/msgpack/msgpack-php.git"
+    - "ext-redis:develop:https://github.com/phpredis/phpredis.git"
+    - "ext-xlswriter:master:https://github.com/viest/php-ext-xlswriter.git"
+  # build-static.sh points this at the working tree it runs from
+  custom-local: []
+
+extra-env:
+  OPENSSLDIR: "/etc/ssl"
