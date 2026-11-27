@@ -6,7 +6,10 @@
 # app's; what differs per app comes from apps/<app>.env, passed as build
 # arguments with the app's name as APP.
 
-ARG BUILDER_IMAGE=dunglas/frankenphp:static-builder-gnu@sha256:c7457b81d8e23af3f4cddb68b3cce6854379b843606b88fc87904d4dea9799ad
+# The builder, by release tag and digest. Upstream rebuilds the newest
+# release's tags every night until its next release ships, and a release's
+# tag stops changing after that.
+ARG BUILDER_IMAGE=dunglas/frankenphp:static-builder-gnu-1.14.0@sha256:7d381a5cba59f4ddd68e516e8973f3d51d333ea15b0d972d308bf3c4f1fdfb8d
 # The binary's own roots. Unset, build-static.sh takes the newest PHP 8.5 from
 # php.net and xcaddy the newest Caddy and plugins, so two builds of one commit
 # could ship a different PHP or Caddy. build/pinned-versions.sh checks the
@@ -91,18 +94,21 @@ RUN set -eux; \
         GOPATH="${PKG_ROOT_PATH}/go-xcaddy/go" \
         "${PKG_ROOT_PATH}/go-xcaddy/bin/go" install \
         "github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}"
-ARG LIBAOM_TAG
 # spc reads download-options from craft.yml, and build-static.sh copies
-# every line it does not rewrite, so a custom-git line there makes spc clone
-# libaom at LIBAOM_TAG. spc ignores such a line, without a word, when no
-# package it downloads has that name: build/pinned-libaom.sh checks the
-# clone after the build. The checks here catch a sed that matched nothing,
-# and a craft.yml that grew a custom-git line of its own.
-RUN set -eux; \
-    line="  custom-git: [\"libaom:${LIBAOM_TAG}:https://aomedia.googlesource.com/aom\"]"; \
-    sed -i "/^download-options:\$/a\\${line}" /go/src/app/craft.yml; \
-    grep -qxF "${line}" /go/src/app/craft.yml; \
-    test "$(grep -c 'custom-git:' /go/src/app/craft.yml)" -eq 1
+# every line it does not rewrite, so a libaom entry under custom-git there
+# makes spc clone libaom at LIBAOM_TAG. build/libaom-craft.sh adds it: to
+# the builder's own custom-git list when craft.yml has one, as 1.14.0's
+# does and marks as temporary, since spc's YAML parser refuses a second
+# custom-git key, and otherwise as a custom-git key of its own. It fails
+# on any other shape and on a craft.yml that names libaom itself. spc
+# ignores such an entry, without a word, when no package it downloads has
+# that name: build/pinned-libaom.sh checks the clone after the build.
+# Unlike the checks, the script is copied in before the build, whose input
+# it writes; LIBAOM_TAG is declared after the copy, just before the step
+# that reads it.
+COPY --chmod=0755 build/libaom-craft.sh /tmp/libaom-craft.sh
+ARG LIBAOM_TAG
+RUN CRAFT=/go/src/app/craft.yml /tmp/libaom-craft.sh
 # Declared after the steps every app shares: RUN sees each ARG as an
 # environment variable, so each would otherwise give those layers a cache
 # key per app. Every RUN below sees them, and the checks read their inputs

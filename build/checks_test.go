@@ -279,7 +279,7 @@ func TestPinnedLibaom(t *testing.T) {
 		{
 			// An spc that renamed its libaom package, or stopped
 			// downloading it by that name, would ignore the custom-git
-			// line while libavif still needs the codec: no libaom here
+			// entry while libavif still needs the codec: no libaom here
 			// is then no evidence, not a pass.
 			name:   "libavif-without-libaom",
 			mutate: dropCacheEntries("libaom"),
@@ -297,7 +297,7 @@ func TestPinnedLibaom(t *testing.T) {
 			want: []string{"lists a source from aomedia.googlesource.com, where libaom comes from, but has no libaom entry"},
 		},
 		{
-			// What spc fetches when it ignored the custom-git line: the
+			// What spc fetches when it ignored the custom-git entry: the
 			// branch libaom's own config names.
 			name:  "branch-head",
 			edits: []edit{{"spc-cache.json", `"version": "dev-v3\.15\.3\+b141d9c"`, `"version": "dev-main+8a10385"`}},
@@ -384,8 +384,9 @@ func TestPinnedLibaom(t *testing.T) {
 			env["LIBAOM_TAG"] = libaomTag
 			r := run(t, "pinned-libaom", tt.inputs(t, env))
 			check(t, r, tt.want)
-			// A wrong libaom is fixed in the Containerfile's pin or its
-			// custom-git line, so each such complaint names LIBAOM_TAG.
+			// A wrong libaom is fixed in LIBAOM_TAG's pin or the
+			// custom-git entry build/libaom-craft.sh adds, so each such
+			// complaint names LIBAOM_TAG.
 			for _, line := range errorLines(r.stderr) {
 				if strings.Contains(line, "dev-") && !strings.Contains(line, "LIBAOM_TAG") {
 					t.Errorf("ERROR line does not name LIBAOM_TAG: %q", line)
@@ -393,6 +394,148 @@ func TestPinnedLibaom(t *testing.T) {
 			}
 			if tt.say != "" && !strings.Contains(r.stdout, tt.say) {
 				t.Errorf("stdout does not say %q:\n%s", tt.say, r.stdout)
+			}
+		})
+	}
+}
+
+// The craft.yml fixtures, each holding download-options as one builder
+// ships them: up to 1.13.6 with no custom-git key, and in 1.14.0 with a
+// custom-git list of the builder's own.
+const (
+	craftNoKey = "testdata/craft/1.13.6.yml"
+	craftList  = "testdata/craft/1.14.0.yml"
+)
+
+func TestLibaomCraft(t *testing.T) {
+	t.Parallel()
+
+	entry := `"libaom:` + libaomTag + `:https://aomedia.googlesource.com/aom"`
+	apcu := `"ext-apcu:master:https://github.com/krakjoe/apcu.git"`
+	tests := []struct {
+		name, fixture string
+		// edits rewrite the fixture before the run, each old string
+		// occurring in it exactly once.
+		edits [][2]string
+		set   map[string]string
+		unset []string
+		// A passing run adds line just below the line after, and only
+		// there. Empty, the run must fail with want and leave craft.yml
+		// as it was.
+		after, line string
+		want        []string
+	}{
+		{
+			name:    "no-key",
+			fixture: craftNoKey,
+			after:   "download-options:\n",
+			line:    "  custom-git: [" + entry + "]\n",
+		},
+		{
+			name:    "list",
+			fixture: craftList,
+			after:   "  custom-git:\n",
+			line:    "    - " + entry + "\n",
+		},
+		{
+			name:    "no-download-options",
+			fixture: craftNoKey,
+			edits:   [][2]string{{"download-options:\n", ""}},
+			want:    []string{`no "download-options:" line`},
+		},
+		{
+			// The list now sits under build-options, where spc reads no
+			// custom-git.
+			name:    "list-outside-download-options",
+			fixture: craftList,
+			edits:   [][2]string{{"download-options:\n", ""}},
+			want:    []string{"in a shape this script does not know"},
+		},
+		{
+			// A YAML list may sit at its key's own indent; an entry
+			// indented deeper beside it would not parse.
+			name:    "list-at-key-indent",
+			fixture: craftList,
+			edits:   [][2]string{{`    - "ext-amqp:`, `  - "ext-amqp:`}},
+			want:    []string{"in a shape this script does not know"},
+		},
+		{
+			// The entry already in a list the script does not know,
+			// here with a comment above its first entry: adding nothing
+			// is a failure, even though the line is there.
+			name:    "list-holds-entry-shape-unknown",
+			fixture: craftList,
+			edits:   [][2]string{{"  custom-git:\n", "  custom-git:\n    # pinned first\n    - " + entry + "\n"}},
+			want:    []string{"in a shape this script does not know"},
+		},
+		{
+			// An inline list could be added to, but only by parsing the
+			// flow syntax, which a line-wise script does not.
+			name:    "inline-list",
+			fixture: craftNoKey,
+			edits:   [][2]string{{"  retry: 5\n", "  retry: 5\n  custom-git: [" + apcu + "]\n"}},
+			want:    []string{"in a shape this script does not know"},
+		},
+		{
+			name:    "two-keys",
+			fixture: craftList,
+			edits:   [][2]string{{"  custom-local: []\n", "  custom-git:\n    - " + apcu + "\n  custom-local: []\n"}},
+			want:    []string{"2 custom-git keys"},
+		},
+		{
+			// The builder pinning libaom itself, at its own ref.
+			name:    "names-libaom",
+			fixture: craftList,
+			edits:   [][2]string{{"  custom-git:\n", "  custom-git:\n    - \"libaom:main:https://aomedia.googlesource.com/aom\"\n"}},
+			want:    []string{"names libaom 2 times"},
+		},
+		{
+			name:    "tag-unset",
+			fixture: craftList,
+			unset:   []string{"LIBAOM_TAG"},
+			want:    []string{"LIBAOM_TAG is empty"},
+		},
+		{
+			name:    "no-craft",
+			fixture: craftList,
+			set:     map[string]string{"CRAFT": "/nonexistent/craft.yml"},
+			want:    []string{"CRAFT names no craft.yml"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			before := read(t, tt.fixture)
+			for _, e := range tt.edits {
+				if n := strings.Count(before, e[0]); n != 1 {
+					t.Fatalf("%s holds %q %d times, want once", tt.fixture, e[0], n)
+				}
+				before = strings.Replace(before, e[0], e[1], 1)
+			}
+			craft := filepath.Join(t.TempDir(), "craft.yml")
+			write(t, craft, before)
+			env := map[string]string{"CRAFT": craft, "LIBAOM_TAG": libaomTag}
+			maps.Copy(env, tt.set)
+			for _, name := range tt.unset {
+				delete(env, name)
+			}
+
+			r := run(t, "libaom-craft", env)
+			check(t, r, tt.want)
+			want := before
+			if tt.after != "" {
+				if n := strings.Count(before, tt.after); n != 1 {
+					t.Fatalf("%s holds %q %d times, want once", tt.fixture, tt.after, n)
+				}
+				want = strings.Replace(before, tt.after, tt.after+tt.line, 1)
+				if !strings.Contains(r.stdout, "libaom at "+libaomTag) {
+					t.Errorf("stdout does not say libaom at %s:\n%s", libaomTag, r.stdout)
+				}
+			}
+			if got := read(t, craft); got != want {
+				t.Errorf("craft.yml after the run:\n%s\nwant:\n%s", got, want)
 			}
 		})
 	}

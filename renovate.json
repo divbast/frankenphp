@@ -110,7 +110,9 @@
       "allowedVersions": "/^v\\d+\\.\\d+\\.\\d+$/"
     },
     {
+      "description": "The builder image, by FrankenPHP release tag. Docker versioning reads a tag that starts with static-builder-gnu- as unversioned, so without this versioning Renovate would follow one release's digests and never propose the next release. The regex takes only the release tags, static-builder-gnu-X.Y.Z, and none of the floating, X.Y, X or -sha- tags beside them.",
       "matchDepNames": ["dunglas/frankenphp"],
+      "versioning": "regex:^static-builder-gnu-(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)$",
       "labels": ["frankenphp"],
       "prBodyNotes": [
         "The build refuses a binary that carries a file capability: frankenphp-manifest reads the carrier's layers and fails on one. Upstream's own FrankenPHP builds set `cap_net_bind_service=ep`, and a binary with a file capability cannot be exec'd at all under `--cap-drop ALL`."

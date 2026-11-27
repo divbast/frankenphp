@@ -65,10 +65,12 @@ this project's one record of LLM involvement.
   fetched is not the one already unpacked; the Containerfile unpacks it
   first and installs `XCADDY_VERSION` over spc's xcaddy, and the craft run
   leaves the package alone because its `.spc-hash` matches. The libaom tag
-  reaches spc as a `custom-git` line added to `craft.yml`, which spc
-  ignores without a word if the name in it is not a package it downloads.
-  `custom-git` takes a tag or a branch, never a commit, since spc clones it
-  with `git clone --branch`. The go-xcaddy step writes spc's download cache
+  reaches spc as an entry `build/libaom-craft.sh` adds under `custom-git`
+  in `craft.yml`: into the builder's own list when it has one, and
+  otherwise as a key of its own. spc ignores the entry without a word if
+  the name in it is not a package it downloads. `custom-git` takes a tag
+  or a branch, never a commit, since spc clones it with
+  `git clone --branch`. The go-xcaddy step writes spc's download cache
   before the craft runs, holding go-xcaddy alone, so a check that reads the
   cache first proves the craft wrote it: every craft fetches `php-src`, and
   `install-pkg` never does
@@ -252,10 +254,10 @@ this project's one record of LLM involvement.
 
 - Go for anything that is not simple, stdlib only, under divbast/ci's
   `golangci.yml`. Bash only where it stays under 30 lines, except the
-  checks under `build/` that run inside the Containerfile's stages, which
-  stay bash under ShellCheck `enable=all` and shfmt, each run by
-  `build/checks_test.go` against fixtures with every failure path seen
-  failing
+  scripts under `build/` that run inside the Containerfile's stages, the
+  checks and `libaom-craft.sh`, which stay bash under ShellCheck
+  `enable=all` and shfmt, each run by `build/checks_test.go` against
+  fixtures with every failure path seen failing
 - Every gate is an error. Any suppression carries its justification on the
   same or the previous line
 - A test that has never failed proves nothing. When adding a check, see it

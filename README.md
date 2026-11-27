@@ -67,7 +67,7 @@ to verify what an app's Containerfile pins.
 
 Every app's binary is built by one `Containerfile` from the same pins:
 
-- the `dunglas/frankenphp:static-builder-gnu` image, by digest, which also
+- the `dunglas/frankenphp:static-builder-gnu-<release>` image, which also
   holds the FrankenPHP source the binary is built from;
 - PHP, Caddy and Caddy's three plugins, by version;
 - xcaddy, which writes the binary's main module and runs its build, by
@@ -75,6 +75,12 @@ Every app's binary is built by one `Containerfile` from the same pins:
 - static-php-cli (spc), which builds PHP and its C libraries, by commit;
 - libaom, the AV1 codec LibreSpeed's gd brings in through libavif, by AOM
   release tag.
+
+The builder is pinned by release tag and digest. Upstream rebuilds the
+newest release's tags every night until its next release, so digest updates
+for the pinned release can arrive nightly, while a release's tag stops
+changing once its successor ships. PHP is pinned on its own, so a PHP update
+never waits on the builder.
 
 `build/pinned-versions.sh`, `build/pinned-libaom.sh` and
 `build/pinned-spc.sh` fail the build if the binary or the xcaddy that built
