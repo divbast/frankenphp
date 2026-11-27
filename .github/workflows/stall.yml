@@ -26,7 +26,7 @@ concurrency:
 jobs:
   stall:
     name: stall
-    uses: divbast/ci/.github/workflows/stall.yml@3f7c3d27a07a997d9bb90b912902b2869ea7989a # v4.36.0
+    uses: divbast/ci/.github/workflows/stall.yml@7f467e170ee835d2cc3ab77fb70487003b365b24 # v4.38.0
     with:
       checks: '["open","stuck","renovate","lookups"]'
     # Everything stall.yml's job asks for, since a called job gets no more
@@ -43,7 +43,7 @@ jobs:
   # One slots job per tag, since each app's binary publishes on its own.
   slots-baikal:
     name: slots (baikal)
-    uses: divbast/ci/.github/workflows/stall.yml@3f7c3d27a07a997d9bb90b912902b2869ea7989a # v4.36.0
+    uses: divbast/ci/.github/workflows/stall.yml@7f467e170ee835d2cc3ab77fb70487003b365b24 # v4.38.0
     with:
       checks: '["slots"]'
       published: ghcr.io/divbast/frankenphp:baikal
@@ -64,7 +64,7 @@ jobs:
 
   slots-librespeed:
     name: slots (librespeed)
-    uses: divbast/ci/.github/workflows/stall.yml@3f7c3d27a07a997d9bb90b912902b2869ea7989a # v4.36.0
+    uses: divbast/ci/.github/workflows/stall.yml@7f467e170ee835d2cc3ab77fb70487003b365b24 # v4.38.0
     with:
       checks: '["slots"]'
       published: ghcr.io/divbast/frankenphp:librespeed
