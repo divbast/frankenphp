@@ -9,7 +9,7 @@
 # The builder, by release tag and digest. Upstream rebuilds the newest
 # release's tags every night until its next release ships, and a release's
 # tag stops changing after that.
-ARG BUILDER_IMAGE=dunglas/frankenphp:static-builder-gnu-1.14.0@sha256:7d381a5cba59f4ddd68e516e8973f3d51d333ea15b0d972d308bf3c4f1fdfb8d
+ARG BUILDER_IMAGE=dunglas/frankenphp:static-builder-gnu-1.14.0@sha256:335b48c0fb6771c830877c91131e570d1ea4f3b945d9e01d7b36759786ef7df5
 # The binary's own roots. Unset, build-static.sh takes the newest PHP 8.5 from
 # php.net and xcaddy the newest Caddy and plugins, so two builds of one commit
 # could ship a different PHP or Caddy. build/pinned-versions.sh checks the
